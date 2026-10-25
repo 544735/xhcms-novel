@@ -51,6 +51,9 @@ jobs:
           cp apps/api/.env.example apps/api/.env
           cp apps/web/.env.example apps/web/.env.local
 
+      - name: 生成 Prisma Client
+        run: pnpm --filter @wmcms/api exec prisma generate
+
       - name: 构建共享类型包
         run: pnpm build:shared
 
