@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 # XHCMS Novel 2.0 —— Windows 一键部署脚本
 #
 # 功能：环境检查 → 生成/补全环境变量与随机密钥 → 安装依赖 → 初始化数据库
@@ -20,6 +20,7 @@
 #   -NoBuild       跳过构建（仅重启服务）
 #   -NoStart       只准备与构建，不启动服务
 #   -FreshEnv      强制重新生成 .env / .env.local（旧文件自动备份）
+#   -NoPull        跳过自动 git pull（默认会先拉取最新代码）
 #   -TimeoutSec    健康检查超时秒数（默认 120）
 # ============================================================================
 [CmdletBinding()]
@@ -32,6 +33,7 @@ param(
     [switch]$NoBuild,
     [switch]$NoStart,
     [switch]$FreshEnv,
+    [switch]$NoPull,
     [int]$TimeoutSec = 120
 )
 
@@ -114,6 +116,33 @@ function Wait-Http([string]$url, [int]$timeoutSec) {
 }
 
 Write-Log "XHCMS Novel 一键部署开始（日志：$deployLog）"
+# ---------- 自动拉取最新代码 ----------
+if (-not $NoPull) {
+    Write-Step '0/8 自动拉取最新代码'
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        if (Test-Path (Join-Path $root '.git')) {
+            $branch = (git -C $root rev-parse --abbrev-ref HEAD 2>$null)
+            if (-not $branch -or $branch -eq 'HEAD') { $branch = 'main' }
+            $dirty = (git -C $root status --porcelain 2>$null)
+            if ($dirty) {
+                Write-Log '工作区存在未提交改动，跳过自动拉取（避免覆盖本地修改；可用 -NoPull 显式关闭）' 'WARN'
+            } else {
+                Write-Log "拉取 origin/$branch 最新代码"
+                git -C $root fetch --depth 1 origin $branch 2>&1 | ForEach-Object { Write-Log $_ }
+                if ($LASTEXITCODE -ne 0) { throw 'git fetch 失败，请检查网络或远程地址' }
+                git -C $root pull --ff-only origin $branch 2>&1 | ForEach-Object { Write-Log $_ }
+                if ($LASTEXITCODE -ne 0) { throw 'git pull 失败（可能存在本地提交/冲突），请手动处理后重试' }
+            }
+        } else {
+            Write-Log '当前目录不是 git 仓库，跳过自动拉取' 'WARN'
+        }
+    } else {
+        Write-Log '未安装 git，跳过自动拉取（可用 -NoPull 关闭此项检查）' 'WARN'
+    }
+} else {
+    Write-Log '已按 -NoPull 跳过自动拉取'
+}
+
 Write-Step '1/8 检查运行环境'
 Require-Command 'node' '请安装 Node.js >= 20（https://nodejs.org）'
 Require-Command 'pnpm' '请执行 corepack enable，或 npm i -g pnpm'

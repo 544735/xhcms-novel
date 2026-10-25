@@ -9,6 +9,7 @@
 #   bash deploy/deploy-linux.sh                 # 一键部署
 #   bash deploy/deploy-linux.sh --seed          # 附带演示数据（会清空数据库）
 #   bash deploy/deploy-linux.sh --skip-install  # 依赖已安装
+#   bash deploy/deploy-linux.sh --no-pull       # 跳过自动 git pull
 #   bash deploy/deploy-linux.sh --no-build      # 只重启
 #   bash deploy/deploy-linux.sh --public-url https://demo.example.com
 #   bash deploy/deploy-linux.sh --systemd       # 生成 systemd 服务并启动（需 sudo）
@@ -22,6 +23,7 @@ SEED=0
 SKIP_INSTALL=0
 NO_BUILD=0
 NO_START=0
+NO_PULL=0
 USE_SYSTEMD=0
 TIMEOUT_SEC=120
 
@@ -34,6 +36,7 @@ while [[ $# -gt 0 ]]; do
     --skip-install) SKIP_INSTALL=1; shift ;;
     --no-build) NO_BUILD=1; shift ;;
     --no-start) NO_START=1; shift ;;
+    --no-pull) NO_PULL=1; shift ;;
     --systemd) USE_SYSTEMD=1; shift ;;
     --timeout) TIMEOUT_SEC="$2"; shift 2 ;;
     -h|--help) sed -n '1,30p' "$0"; exit 0 ;;
@@ -92,6 +95,30 @@ wait_http() {
 }
 
 log "XHCMS Novel 一键部署开始（日志：$DEPLOY_LOG）"
+
+# ---------- 自动拉取最新代码 ----------
+if [[ "$NO_PULL" = "0" ]]; then
+  step "0/8 自动拉取最新代码"
+  if command -v git >/dev/null 2>&1; then
+    if [[ -d "$ROOT/.git" ]]; then
+      BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+      [[ -z "$BRANCH" || "$BRANCH" = "HEAD" ]] && BRANCH=main
+      if [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then
+        log "工作区存在未提交改动，跳过自动拉取（避免覆盖本地修改；可用 --no-pull 显式关闭）"
+      else
+        git -C "$ROOT" fetch --depth 1 origin "$BRANCH" >>"$DEPLOY_LOG" 2>&1 || die "git fetch 失败，请检查网络或远程地址"
+        git -C "$ROOT" pull --ff-only origin "$BRANCH" >>"$DEPLOY_LOG" 2>&1 || die "git pull 失败（可能存在本地提交/冲突），请手动处理后重试"
+        log "已更新到 origin/$BRANCH 最新代码"
+      fi
+    else
+      log "当前目录不是 git 仓库，跳过自动拉取"
+    fi
+  else
+    log "未安装 git，跳过自动拉取"
+  fi
+else
+  log "已按 --no-pull 跳过自动拉取"
+fi
 
 step "1/8 检查运行环境"
 command -v node >/dev/null || die "未找到 Node.js（需 >= 20）"

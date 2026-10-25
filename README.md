@@ -82,17 +82,20 @@ wmcms/
 
 ### 一键部署（推荐）
 
+部署脚本会**先自动拉取仓库最新代码**（检测到未提交改动时自动跳过，避免覆盖本地修改；可用 `-NoPull` / `--no-pull` 关闭），
+然后完成环境检测、依赖安装、数据库初始化、构建、启动与健康检查。
+
 ```powershell
 # Windows：自动生成环境变量与随机密钥、装依赖、初始化数据库、构建、启动并做健康检查
 powershell -ExecutionPolicy Bypass -File deploy\deploy-windows.ps1 -Seed
 ```
 
 ```bash
-# Linux / macOS（加 --systemd 可生成 systemd 服务并开机自启）
+# Linux / macOS（--systemd 可生成 systemd 服务并开机自启；默认自动 git pull，--no-pull 可跳过）
 bash deploy/deploy-linux.sh --seed
 ```
 
-参数：`-Seed`（演示数据）、`-SkipInstall`、`-NoBuild`、`-NoStart`、`-FreshEnv`、`-PublicUrl`、`-ApiPort/-WebPort`；停止/重启见 [`deploy/stop-windows.ps1`](deploy/stop-windows.ps1) / [`deploy/start-windows.ps1`](deploy/start-windows.ps1)，详见 [使用手册 §7](docs/使用手册.md#7-部署与运维)。
+参数：`-Seed`（演示数据）、`-SkipInstall`、`-NoBuild`、`-NoStart`、`-FreshEnv`、`-NoPull`（跳过自动拉取）、`-PublicUrl`、`-ApiPort/-WebPort`；Linux 对应 `--seed` / `--skip-install` / `--no-build` / `--no-start` / `--no-pull` / `--public-url` / `--api-port` / `--web-port`。停止/重启见 [`deploy/stop-windows.ps1`](deploy/stop-windows.ps1) / [`deploy/start-windows.ps1`](deploy/start-windows.ps1)，详见 [使用手册 §7](docs/使用手册.md#7-部署与运维)。
 
 ### 一键拉取并安装（Docker，自动环境检测）
 
