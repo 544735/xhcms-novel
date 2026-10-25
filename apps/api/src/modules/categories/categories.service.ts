@@ -257,12 +257,21 @@ export class CategoriesService {
     try {
       row = await this.prisma.$transaction(async (tx) => {
         if (dto.parentId !== undefined) {
-          // PostgreSQL 行锁：按 id 排序锁定「自身 + 目标父级」，把并发更换父级的环检测串行化；
-          // 排序可避免 A→B / B→A 并发时的交叉等待死锁方向。
+          // 行锁「自身 + 目标父级」，把并发更换父级的环检测串行化；排序避免交叉死锁方向。
+          // 方言差异：PostgreSQL 用双引号标识符 + ANY($1::text[])，MySQL 用反引号 + IN (?,?)，故按连接串分支。
           const lockIds = [id, dto.parentId]
             .filter((value): value is string => Boolean(value))
             .sort();
-          await tx.$queryRaw`SELECT id FROM "Category" WHERE id = ANY(${lockIds}::text[]) ORDER BY id FOR UPDATE`;
+          const isMySql = (process.env.DATABASE_URL ?? '').startsWith('mysql');
+          if (isMySql) {
+            const placeholders = lockIds.map(() => '?').join(', ');
+            await tx.$queryRawUnsafe(
+              `SELECT id FROM \`Category\` WHERE id IN (${placeholders}) ORDER BY id FOR UPDATE`,
+              ...lockIds,
+            );
+          } else {
+            await tx.$queryRaw`SELECT id FROM "Category" WHERE id = ANY(${lockIds}::text[]) ORDER BY id FOR UPDATE`;
+          }
           await this.assertNoCycle(tx, siteId, id, dto.parentId ?? null);
         }
         return tx.category.update({
