@@ -55,7 +55,9 @@ services:
       # 若在容器/宿主机前再加一层 nginx，请按实际部署设置（如 "1" 或代理网段），
       # 并避免把 4000 端口直接暴露到公网——否则客户端可伪造 X-Forwarded-For。
       TRUST_PROXY: ${TRUST_PROXY:-loopback}
-      SEED_DEMO: ${SEED_DEMO:-0}
+      SEED_DEMO: 
+      # 生产 seed 随机生成的管理员口令写入数据卷，便于首次登录读取
+      SEED_CREDENTIALS_FILE: /data/.seed-credentials.txt${SEED_DEMO:-0}
     volumes:
       # 仅上传文件；数据库已迁移到 PostgreSQL 服务
       - xhcms-data:/data

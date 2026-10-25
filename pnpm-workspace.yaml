@@ -14,3 +14,10 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - react-hook-form@7.91.0
+
+overrides:
+  multer: ^2.5.0
+  deepmerge-ts: ^8.0.0
+  postcss: ^8.5.12
+  postcss-selector-parser: ^7.1.6
+  zod: ^4.6.6
