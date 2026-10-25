@@ -46,7 +46,7 @@
 
 ## 🧱 技术栈
 
-- **后端**：NestJS 11、Prisma 6、SQLite（可切 PostgreSQL）、JWT（管理员/会员双密钥）、class-validator、sanitize-html、cheerio + iconv-lite（采集）、Swagger
+- **后端**：NestJS 11、Prisma 6、PostgreSQL 16（pg_trgm 中文子串检索、部分唯一索引）、JWT（管理员/会员双密钥）、class-validator、sanitize-html、cheerio + iconv-lite（采集）、Swagger
 - **前端**：Next.js 15 App Router（RSC/SSR）、React 19、TypeScript 5.9（strict）、TanStack Query 5、Zustand 5、Tailwind CSS 3、lucide-react
 - **工程**：pnpm workspaces、共享契约包 `@wmcms/shared`、Jest 29 + Supertest 7 e2e
 
@@ -97,13 +97,16 @@ bash deploy/deploy-linux.sh --seed
 ### 手动部署
 
 ```bash
-# 环境：Node ≥ 20、pnpm 11
+# 环境：Node ≥ 20、pnpm 11、Docker（本地 PostgreSQL）
 pnpm install
 cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env.local
 
-# 初始化数据库（SQLite）与种子数据（7 本书 / 70 章 / 双站点 / 会员 / VIP 订单 / 书评 / 采集书源）
-pnpm --filter @wmcms/api db:push
+# 启动本地 PostgreSQL(:5433) + Redis(:6379)
+pnpm infra:up
+
+# 初始化数据库（PostgreSQL：应用迁移 + 种子数据，7 本书 / 70 章 / 双站点 / 会员 / VIP 订单 / 书评 / 采集书源）
+pnpm db:deploy
 pnpm --filter @wmcms/api db:seed
 
 # 开发模式（API :4000 · Web :3000）

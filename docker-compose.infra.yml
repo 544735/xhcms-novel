@@ -1,0 +1,46 @@
+# 本地开发/测试基础设施（PostgreSQL + Redis）
+# 用法：
+#   docker compose -f docker-compose.infra.yml up -d
+#   docker compose -f docker-compose.infra.yml ps
+# 说明：仅供开发与 E2E 使用；生产请使用 docker-compose.yml（应用 + 数据库一体部署）。
+name: xhcms-infra
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: xhcms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: xhcms
+      POSTGRES_PASSWORD: xhcms
+      POSTGRES_DB: xhcms
+      # 中文排序/比较使用 UTF-8
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "5433:5432"
+    volumes:
+      - xhcms-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xhcms -d xhcms"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: xhcms-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - xhcms-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  xhcms-pg-data:
+  xhcms-redis-data:

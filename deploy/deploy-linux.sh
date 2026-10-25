@@ -113,7 +113,7 @@ if [[ ! -f "$API_ENV" ]]; then
   # 密钥在部署时随机生成并写入 .env；源码中不存在任何固定密钥。
   {
     printf '# XHCMS Novel 2.0 API 环境变量（由 deploy-linux.sh 于 %s 生成）\n' "$TIMESTAMP"
-    printf 'DATABASE_URL="file:./dev.db"\n'
+    printf 'DATABASE_URL="postgresql://xhcms:xhcms@127.0.0.1:5432/xhcms?schema=public"\n'
     printf 'PORT=%s\n' "$API_PORT"
     printf 'NODE_ENV=production\n'
     printf 'JWT_SECRET=%s\n' "\"$(gen_secret)\""

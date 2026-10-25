@@ -105,7 +105,7 @@ export default function AdminLoginPage() {
             <span className="h-1 w-1 rounded-full bg-slate-700" />
             <span>TypeScript 全栈</span>
             <span className="h-1 w-1 rounded-full bg-slate-700" />
-            <span>Prisma · SQLite</span>
+            <span>Prisma · PostgreSQL</span>
           </div>
         </div>
       </div>

@@ -50,8 +50,8 @@ EXPOSE 3000 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:4000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-# 安全说明：镜像当前以 root 运行，因为 /data 命名卷默认由 root 拥有、入口脚本需要写 SQLite 与上传目录。
+# 安全说明：镜像当前以 root 运行，因为 /data 命名卷默认由 root 拥有、入口脚本需要写上传目录并连接 PostgreSQL 服务。
 # 生产建议另建非 root 用户：先 chown 卷目录（或改用已授权的 bind mount），再在运行阶段加 USER app。
 
-# 入口会执行 prisma db push（可选 SEED_DEMO=1 写入演示数据），随后同时启动 API 与 Web
+# 入口会执行 prisma migrate deploy（可选 SEED_DEMO=1 写入演示数据），随后同时启动 API 与 Web
 ENTRYPOINT ["/usr/local/bin/xhcms-entrypoint"]

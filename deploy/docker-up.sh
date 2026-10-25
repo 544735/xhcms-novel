@@ -21,7 +21,7 @@ docker info >/dev/null 2>&1 || { echo "Docker 守护进程未运行，请先启�
 echo "==> 准备 docker-compose 环境变量"
 if [[ ! -f .env ]]; then
   cp deploy/docker-env.example .env
-  for key in JWT_SECRET JWT_REFRESH_SECRET JWT_MEMBER_SECRET; do
+  for key in POSTGRES_PASSWORD JWT_SECRET JWT_REFRESH_SECRET JWT_MEMBER_SECRET; do
     secret="$(node -e "console.log(require('crypto').randomBytes(48).toString('hex'))")"
     sed -i "s|^${key}=.*|${key}=${secret}|" .env
   done

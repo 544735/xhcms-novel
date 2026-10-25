@@ -31,6 +31,7 @@ $examplePath = Join-Path $root 'deploy\docker-env.example'
 if (-not (Test-Path $envPath)) {
     $content = Get-Content $examplePath -Raw
     $secrets = @{
+        POSTGRES_PASSWORD = New-Secret
         JWT_SECRET = New-Secret
         JWT_REFRESH_SECRET = New-Secret
         JWT_MEMBER_SECRET = New-Secret

@@ -14,14 +14,17 @@ cmd /c "pnpm --filter @wmcms/api build"   # 后端编译
 cmd /c "pnpm --filter @wmcms/api typecheck"
 cmd /c "pnpm --filter @wmcms/web build"   # 前端构建（需要先 build:shared）
 cmd /c "pnpm --filter @wmcms/web typecheck"
-cmd /c "pnpm db:push"                     # 同步 schema 到 SQLite（需要 prisma generate）
+cmd /c "pnpm db:deploy"                   # 应用 PostgreSQL 迁移（需先 pnpm infra:up）
 cmd /c "pnpm db:seed"                     # 重新生成演示数据（会清空库）
+cmd /c "pnpm --filter @wmcms/api test:unit"   # 单元测试（无需数据库）
+cmd /c "pnpm --filter @wmcms/api test"        # E2E（需 PostgreSQL；会自动 reset + seed）
 cmd /c "pnpm dev:api"                     # 启动 API: http://localhost:4000/api/v1
 cmd /c "pnpm dev:web"                     # 启动 Web: http://localhost:3000
 ```
 
 - 运行期端口：API `4000`，Web `3000`。
-- 数据库文件：`apps/api/prisma/dev.db`。
+- 数据库：PostgreSQL 16（本地由 `docker compose -f docker-compose.infra.yml` 提供，默认
+  `postgresql://xhcms:xhcms@127.0.0.1:5433/xhcms?schema=public`）；迁移文件在 `apps/api/prisma/migrations/`。
 - Swagger：`http://localhost:4000/api/docs`。
 - 演示账号（seed 生成，**仅限本地开发/演示**）：`admin`（默认口令 `Admin@123456`，超管）、`editor`
   （`Editor@123456`，内容编辑）、`operator`（`Operator@123456`，运营）；门户会员 `alice`、作者 `xinghe`

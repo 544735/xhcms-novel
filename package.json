@@ -17,6 +17,11 @@
     "db:push": "pnpm --filter @wmcms/api db:push",
     "db:seed": "pnpm --filter @wmcms/api db:seed",
     "db:reset": "pnpm --filter @wmcms/api db:reset",
+    "db:migrate": "pnpm --filter @wmcms/api db:migrate",
+    "db:deploy": "pnpm --filter @wmcms/api db:deploy",
+    "infra:up": "docker compose -f docker-compose.infra.yml up -d",
+    "infra:down": "docker compose -f docker-compose.infra.yml down",
+    "infra:ps": "docker compose -f docker-compose.infra.yml ps",
     "test": "pnpm --filter @wmcms/api test:e2e",
     "typecheck": "pnpm --filter @wmcms/api typecheck && pnpm --filter @wmcms/web typecheck"
   }

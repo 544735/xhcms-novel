@@ -1,4 +1,4 @@
-﻿# ============================================================================
+# ============================================================================
 # XHCMS Novel 2.0 —— Windows 一键部署脚本
 #
 # 功能：环境检查 → 生成/补全环境变量与随机密钥 → 安装依赖 → 初始化数据库
@@ -149,7 +149,7 @@ if (-not (Test-Path $apiEnvPath)) {
     $q = [char]34
     $envLines = @(
         ('# XHCMS Novel 2.0 API 环境变量（由 deploy-windows.ps1 于 ' + $timestamp + ' 生成）'),
-        ('DATABASE_URL=' + $q + 'file:./dev.db' + $q),
+        ('DATABASE_URL=' + $q + 'postgresql://xhcms:xhcms@127.0.0.1:5432/xhcms?schema=public' + $q),
         ('PORT=' + $ApiPort),
         'NODE_ENV=production',
         ('JWT_SECRET=' + $q + $secrets.JWT_SECRET + $q),
@@ -175,7 +175,7 @@ if (-not (Test-Path $apiEnvPath)) {
 
     # 关键项缺失时补全，避免手工编辑后无法启动
     $requiredDefaults = [ordered]@{
-        'DATABASE_URL' = 'file:./dev.db'
+        'DATABASE_URL' = 'postgresql://xhcms:xhcms@127.0.0.1:5432/xhcms?schema=public'
         'PORT' = [string]$ApiPort
         'NODE_ENV' = 'production'
         'CORS_ORIGINS' = $PublicUrl

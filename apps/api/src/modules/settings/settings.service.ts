@@ -76,22 +76,17 @@ export class SettingsService {
           create: { siteId, key, value, group },
         });
       } else {
-        // SQLite 的唯一索引对 NULL 不去重，全局设置需手工查重后更新；
-        // 查重 + 写入放进同一事务，避免并发请求同时查不到再各建一行
-        await this.prisma.$transaction(async (tx) => {
-          const existing = await tx.setting.findFirst({
+        // 全局设置（siteId IS NULL）由部分唯一索引 Setting_global_key_unique 保证唯一：
+        // 先插入，命中唯一约束（并发插入同一 key）再转为更新，避免重复行与丢失更新。
+        try {
+          await this.prisma.setting.create({ data: { siteId: null, key, value, group } });
+        } catch (error) {
+          if ((error as { code?: string }).code !== 'P2002') throw error;
+          await this.prisma.setting.updateMany({
             where: { siteId: null, key },
-            select: { id: true },
+            data: { value, group },
           });
-          if (existing) {
-            await tx.setting.update({
-              where: { id: existing.id },
-              data: { value, group },
-            });
-          } else {
-            await tx.setting.create({ data: { siteId: null, key, value, group } });
-          }
-        });
+        }
       }
       savedKeys.push(key);
     }

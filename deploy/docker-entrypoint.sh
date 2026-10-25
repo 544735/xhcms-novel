@@ -5,22 +5,21 @@
 #   3) 同时启动 API（4000）与 Web（3000）
 set -euo pipefail
 
-export DATABASE_URL="${DATABASE_URL:-file:/data/dev.db}"
+export DATABASE_URL="${DATABASE_URL:-postgresql://xhcms:xhcms@db:5432/xhcms?schema=public}"
 export UPLOAD_DIR="${UPLOAD_DIR:-/data/uploads}"
 export API_PORT="${API_PORT:-4000}"
 export WEB_PORT="${WEB_PORT:-3000}"
 
-DATA_DIR="${DATABASE_URL#file:}"
-mkdir -p "$(dirname "$DATA_DIR")" "$UPLOAD_DIR"
+mkdir -p "$UPLOAD_DIR"
 
 cd /app
 
-echo "[entrypoint] 同步数据库结构：$DATABASE_URL"
-pnpm --filter @wmcms/api exec prisma db push --schema prisma/schema.prisma --skip-generate
+echo "[entrypoint] 应用数据库迁移：$DATABASE_URL"
+pnpm --filter @wmcms/api exec prisma migrate deploy --schema prisma/schema.prisma
 
 if [ "${SEED_DEMO:-0}" = "1" ]; then
   # db:seed 是破坏性操作（先清空全部表），因此只允许在数据卷上首次执行一次。
-  SEED_MARKER="$(dirname "$DATA_DIR")/.seeded"
+  SEED_MARKER="/data/.seeded"
   if [ -f "$SEED_MARKER" ]; then
     echo "[entrypoint] 检测到初始化标记 $SEED_MARKER，跳过演示数据（保留现有数据）"
   else

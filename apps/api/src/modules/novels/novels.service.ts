@@ -88,9 +88,9 @@ export class NovelsService {
     const keyword = query.keyword?.trim();
     if (keyword) {
       where.OR = [
-        { title: { contains: keyword } },
-        { authorName: { contains: keyword } },
-        { slug: { contains: keyword } },
+        { title: { contains: keyword, mode: 'insensitive' } },
+        { authorName: { contains: keyword, mode: 'insensitive' } },
+        { slug: { contains: keyword, mode: 'insensitive' } },
       ];
     }
 
@@ -503,9 +503,9 @@ export class NovelsService {
     const keyword = query.keyword?.trim();
     if (keyword) {
       where.OR = [
-        { title: { contains: keyword } },
-        { authorName: { contains: keyword } },
-        { summary: { contains: keyword } },
+        { title: { contains: keyword, mode: 'insensitive' } },
+        { authorName: { contains: keyword, mode: 'insensitive' } },
+        { summary: { contains: keyword, mode: 'insensitive' } },
       ];
     }
 

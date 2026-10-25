@@ -15,6 +15,9 @@ API_PORT=4000
 # 浏览器访问 API 的地址（构建期写入前端）
 NEXT_PUBLIC_API_URL=http://localhost:4000/api/v1
 
+# PostgreSQL 密码（必填；compose 会用它创建 xhcms 库，并拼进应用的 DATABASE_URL）
+POSTGRES_PASSWORD=
+
 # 三个 JWT 密钥（必填，生产环境务必使用随机值）
 JWT_SECRET=
 JWT_REFRESH_SECRET=

@@ -1,13 +1,30 @@
-# XHCMS Novel 2.0 —— Docker Compose 部署
+# XHCMS Novel 2.0 —— Docker Compose 部署（应用 + PostgreSQL）
 # 使用：
-#   cp deploy/docker-env.example .env      # 填写/生成三个 JWT 密钥
+#   cp deploy/docker-env.example .env      # 填写 JWT 密钥与 POSTGRES_PASSWORD
 #   docker compose up -d --build
 #   docker compose logs -f
-# 数据（SQLite + 上传文件）持久化在命名卷 xhcms-data 中。
+# 数据：PostgreSQL 数据在 xhcms-pg 卷，上传文件在 xhcms-data 卷。
 
 name: xhcms
 
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: xhcms-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: xhcms
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请复制 deploy/docker-env.example 为 .env 并填写 POSTGRES_PASSWORD}
+      POSTGRES_DB: xhcms
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - xhcms-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xhcms -d xhcms"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   app:
     build:
       context: .
@@ -17,6 +34,9 @@ services:
     image: xhcms-novel:${VERSION:-2.0.0}
     container_name: xhcms
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     ports:
       - "${WEB_PORT:-3000}:3000"
       - "${API_PORT:-4000}:4000"
@@ -24,7 +44,7 @@ services:
       NODE_ENV: production
       API_PORT: 4000
       WEB_PORT: 3000
-      DATABASE_URL: file:/data/dev.db
+      DATABASE_URL: postgresql://xhcms:${POSTGRES_PASSWORD}@db:5432/xhcms?schema=public
       UPLOAD_DIR: /data/uploads
       CORS_ORIGINS: ${PUBLIC_URL:-http://localhost:3000}
       PUBLIC_BASE_URL: ${PUBLIC_URL:-http://localhost:3000}
@@ -37,6 +57,7 @@ services:
       TRUST_PROXY: ${TRUST_PROXY:-loopback}
       SEED_DEMO: ${SEED_DEMO:-0}
     volumes:
+      # 仅上传文件；数据库已迁移到 PostgreSQL 服务
       - xhcms-data:/data
     healthcheck:
       test:
@@ -51,3 +72,4 @@ services:
 
 volumes:
   xhcms-data:
+  xhcms-pg:

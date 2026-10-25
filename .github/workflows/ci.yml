@@ -21,6 +21,22 @@ jobs:
     timeout-minutes: 30
     env:
       CI: true
+      # E2E 使用 PostgreSQL 服务容器（setup-env 会在每次测试前 reset + seed）
+      DATABASE_URL: postgresql://xhcms:xhcms@localhost:5432/xhcms?schema=public
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: xhcms
+          POSTGRES_PASSWORD: xhcms
+          POSTGRES_DB: xhcms
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U xhcms -d xhcms"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -71,11 +87,6 @@ jobs:
 
       - name: 生产构建
         run: pnpm build
-
-      - name: 初始化测试数据库
-        run: |
-          pnpm --filter @wmcms/api db:push
-          pnpm --filter @wmcms/api db:seed
 
       - name: API E2E 测试
         run: pnpm --filter @wmcms/api test

@@ -257,6 +257,12 @@ export class CategoriesService {
     try {
       row = await this.prisma.$transaction(async (tx) => {
         if (dto.parentId !== undefined) {
+          // PostgreSQL 行锁：按 id 排序锁定「自身 + 目标父级」，把并发更换父级的环检测串行化；
+          // 排序可避免 A→B / B→A 并发时的交叉等待死锁方向。
+          const lockIds = [id, dto.parentId]
+            .filter((value): value is string => Boolean(value))
+            .sort();
+          await tx.$queryRaw`SELECT id FROM "Category" WHERE id = ANY(${lockIds}::text[]) ORDER BY id FOR UPDATE`;
           await this.assertNoCycle(tx, siteId, id, dto.parentId ?? null);
         }
         return tx.category.update({
@@ -268,6 +274,10 @@ export class CategoriesService {
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException('栏目 slug 已存在，请更换');
+      }
+      // 并发更新同一栏目/父子链时 PostgreSQL 可能抛死锁或序列化失败，提示重试而不是 500
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+        throw new ConflictException('栏目层级正被并发修改，请稍后重试');
       }
       throw error;
     }

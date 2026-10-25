@@ -146,9 +146,9 @@ export class ArticlesService {
         ...(Array.isArray(where.AND) ? where.AND : []),
         {
           OR: [
-            { title: { contains: keyword } },
-            { summary: { contains: keyword } },
-            { slug: { contains: keyword } },
+            { title: { contains: keyword, mode: 'insensitive' } },
+            { summary: { contains: keyword, mode: 'insensitive' } },
+            { slug: { contains: keyword, mode: 'insensitive' } },
           ],
         },
       ];
@@ -487,8 +487,8 @@ export class ArticlesService {
     if (keyword) {
       and.push({
         OR: [
-          { title: { contains: keyword } },
-          { summary: { contains: keyword } },
+          { title: { contains: keyword, mode: 'insensitive' } },
+          { summary: { contains: keyword, mode: 'insensitive' } },
         ],
       });
     }

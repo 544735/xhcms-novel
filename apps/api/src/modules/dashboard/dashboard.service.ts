@@ -164,7 +164,7 @@ export class DashboardService {
       system: {
         nodeVersion: process.version,
         uptime: Math.round(process.uptime()),
-        database: 'SQLite',
+        database: 'PostgreSQL',
         pluginsEnabled,
         sites: siteCount,
       },

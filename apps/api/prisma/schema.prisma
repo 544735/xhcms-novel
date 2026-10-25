@@ -1,11 +1,12 @@
 // XHCMS 2.0 数据模型
-// SQLite 不支持 Prisma Json 类型，因此结构化数据统一以 JSON 字符串存储（String）。
+// 数据库：PostgreSQL 16（生产/开发/E2E 统一）；结构化数据仍以 JSON 字符串存储（String），
+// 以保持与既有 service 层 JSON.parse/stringify 代码兼容。
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -460,7 +461,7 @@ model Chapter {
   comments NovelComment[]
 
   @@unique([novelId, chapterNo])
-  // SQLite 下 NULL 不参与唯一约束：手工/JSON 源章节（无 sourceUrl）不受影响
+  // 可空唯一列在多行 NULL 时互不冲突：手工/JSON 源章节（无 sourceUrl）不受影响
   @@unique([novelId, sourceUrl])
   @@index([novelId, status, chapterNo])
 }
@@ -576,7 +577,7 @@ model ChapterUnlock {
   member  Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
   chapter Chapter? @relation(fields: [chapterId], references: [id], onDelete: SetNull)
 
-  // 可空唯一在 SQLite 下允许多行 NULL（章节被删后不会撞唯一约束）
+  // 可空唯一在 PostgreSQL/SQLite 下允许多行 NULL（章节被删后不会撞唯一约束）
   @@unique([memberId, chapterId])
   @@index([memberId, createdAt])
   @@index([memberId, novelId, chapterNo])
