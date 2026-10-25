@@ -27,7 +27,7 @@ jobs:
         run: ./scripts/package-release.ps1
 
       - name: 上传工作流产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xhcms-novel-release
           path: release/*.zip
