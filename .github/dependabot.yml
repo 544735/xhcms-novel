@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      security-patches:
+        applies-to: security-updates
+        patterns: ['*']
+    ignore:
+      # sanitize-html 2.18 为 ESM-only，升级需要先改造 Jest/构建链
+      - dependency-name: sanitize-html
+        versions: ['>=2.18.0']
+      # Tiptap 3 为破坏性大版本，需单独改造编辑器
+      - dependency-name: '@tiptap/*'
+        update-types: ['version-update:semver-major']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

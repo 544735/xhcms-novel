@@ -126,9 +126,14 @@ export const CONTENT_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   disallowedTagsMode: 'discard',
 };
 
+// 纵深防御：noscript/meta 不在 allowlist 内，但 sanitize-html 2.17 存在
+// 「noscript 丢弃区提前结束 / meta refresh 携带 javascript:」两条 moderate advisory，
+// 这里先整段剥离，再走白名单清洗。
+const DANGEROUS_BLOCKS = /<(noscript|meta)\b[^>]*>[\s\S]*?<\/\1\s*>|<meta\b[^>]*>/gi;
+
 export function sanitizeContent(html: string | null | undefined): string {
   if (!html) return '';
-  return sanitizeHtml(html, CONTENT_SANITIZE_OPTIONS);
+  return sanitizeHtml(String(html).replace(DANGEROUS_BLOCKS, ''), CONTENT_SANITIZE_OPTIONS);
 }
 
 /** 常见 HTML 实体 → 字符（单次扫描，避免 `&amp;lt;` 被反复解码成 `<`） */

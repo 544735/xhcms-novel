@@ -82,6 +82,9 @@ jobs:
       - name: Prisma Schema 校验
         run: pnpm --filter @wmcms/api exec prisma validate
 
+      - name: 依赖漏洞审计（high 阻断）
+        run: pnpm audit --audit-level high
+
       - name: 单元测试
         run: pnpm --filter @wmcms/api test:unit
 
