@@ -1,0 +1,41 @@
+# XHCMS Novel 2.0 — Nginx 反向代理示例
+# 将 example.com 替换为你的域名；证书路径按需修改。
+# 前置：API 监听 4000，Web 监听 3000
+
+upstream wmcms_api { server 127.0.0.1:4000; }
+upstream wmcms_web { server 127.0.0.1:3000; }
+
+server {
+    listen 80;
+    server_name example.com;
+
+    # 生产环境建议 301 到 HTTPS
+    # return 301 https://$host$request_uri;
+
+    client_max_body_size 20m;
+
+    location /api/ {
+        proxy_pass http://wmcms_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /uploads/ {
+        proxy_pass http://wmcms_api;
+        proxy_set_header Host $host;
+        expires 7d;
+    }
+
+    location / {
+        proxy_pass http://wmcms_web;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}

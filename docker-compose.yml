@@ -1,0 +1,49 @@
+# XHCMS Novel 2.0 —— Docker Compose 部署
+# 使用：
+#   cp deploy/docker-env.example .env      # 填写/生成三个 JWT 密钥
+#   docker compose up -d --build
+#   docker compose logs -f
+# 数据（SQLite + 上传文件）持久化在命名卷 xhcms-data 中。
+
+name: xhcms
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        # 浏览器访问 API 的地址：本地用 localhost:4000；域名部署改为 https://your-domain.com/api/v1
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000/api/v1}
+    image: xhcms-novel:${VERSION:-2.0.0}
+    container_name: xhcms
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+      - "${API_PORT:-4000}:4000"
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      WEB_PORT: 3000
+      DATABASE_URL: file:/data/dev.db
+      UPLOAD_DIR: /data/uploads
+      CORS_ORIGINS: ${PUBLIC_URL:-http://localhost:3000}
+      PUBLIC_BASE_URL: ${PUBLIC_URL:-http://localhost:3000}
+      JWT_SECRET: ${JWT_SECRET:?请复制 deploy/docker-env.example 为 .env 并填写 JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?缺少 JWT_REFRESH_SECRET}
+      JWT_MEMBER_SECRET: ${JWT_MEMBER_SECRET:?缺少 JWT_MEMBER_SECRET}
+      SEED_DEMO: ${SEED_DEMO:-0}
+    volumes:
+      - xhcms-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  xhcms-data:

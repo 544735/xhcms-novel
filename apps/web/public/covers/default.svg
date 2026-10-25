@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="750" viewBox="0 0 1200 750" role="img" aria-label="XHCMS 封面">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="55%" stop-color="#a855f7"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.3" fill="#ffffff" opacity="0.18"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="750" fill="url(#bg)"/>
+  <g><circle cx="228" cy="158" r="238" fill="#6366f1" opacity="0.55"/><circle cx="792" cy="552" r="278" fill="#a855f7" opacity="0.45"/><rect x="528" y="168" width="278" height="268" rx="64" fill="#ffffff" opacity="0.10" transform="rotate(18 720 320)"/><path d="M0 608 Q 328 438 640 548 T 1200 508 L1200 750 L0 750 Z" fill="#0f172a" opacity="0.55"/></g>
+  <rect width="1200" height="750" fill="url(#dots)"/>
+  <g transform="translate(1060 92)" opacity="0.9">
+    <rect width="68" height="68" rx="20" fill="#ffffff" opacity="0.16"/>
+    <path d="M20 34 L30 22 L38 34 L46 26 L48 46 L20 46 Z" fill="#ffffff" opacity="0.85"/>
+  </g>
+  <rect x="0" y="0" width="1200" height="750" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="2"/>
+  <g opacity="0.9"/>
+</svg>

@@ -1,0 +1,23 @@
+{
+  "name": "wmcms",
+  "version": "2.0.0",
+  "private": true,
+  "description": "XHCMS 2.0 — 现代化全栈内容管理系统 (NestJS + Next.js + Prisma)",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:shared": "pnpm --filter @wmcms/shared build",
+    "dev": "pnpm build:shared && pnpm --parallel --filter @wmcms/api --filter @wmcms/web dev",
+    "dev:api": "pnpm build:shared && pnpm --filter @wmcms/api dev",
+    "dev:web": "pnpm build:shared && pnpm --filter @wmcms/web dev",
+    "build": "pnpm build:shared && pnpm --filter @wmcms/api build && pnpm --filter @wmcms/web build",
+    "start": "pnpm --parallel --filter @wmcms/api --filter @wmcms/web start",
+    "db:push": "pnpm --filter @wmcms/api db:push",
+    "db:seed": "pnpm --filter @wmcms/api db:seed",
+    "db:reset": "pnpm --filter @wmcms/api db:reset",
+    "test": "pnpm --filter @wmcms/api test:e2e",
+    "typecheck": "pnpm --filter @wmcms/api typecheck && pnpm --filter @wmcms/web typecheck"
+  }
+}

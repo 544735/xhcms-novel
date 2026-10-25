@@ -1,0 +1,280 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-sans: ui-sans-serif;
+
+    --background: 220 25% 97%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 243 75% 59%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 20% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 220 20% 96%;
+    --muted-foreground: 215 16% 46%;
+    --accent: 243 75% 96%;
+    --accent-foreground: 243 75% 40%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 60% 38%;
+    --success-foreground: 0 0% 100%;
+    --warning: 32 95% 48%;
+    --warning-foreground: 0 0% 100%;
+
+    --border: 220 18% 90%;
+    --input: 220 18% 88%;
+    --ring: 243 75% 59%;
+    --radius: 0.85rem;
+
+    --sidebar: 0 0% 100%;
+    --sidebar-foreground: 222 47% 18%;
+    --sidebar-muted: 215 16% 50%;
+    --sidebar-active: 243 75% 96%;
+  }
+
+  .dark {
+    --background: 224 45% 8%;
+    --foreground: 210 40% 96%;
+
+    --card: 224 40% 11%;
+    --card-foreground: 210 40% 96%;
+    --popover: 224 40% 11%;
+    --popover-foreground: 210 40% 96%;
+
+    --primary: 243 80% 66%;
+    --primary-foreground: 224 45% 8%;
+    --secondary: 223 30% 16%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 223 30% 16%;
+    --muted-foreground: 215 20% 64%;
+    --accent: 243 42% 20%;
+    --accent-foreground: 243 80% 85%;
+    --destructive: 0 70% 58%;
+    --destructive-foreground: 224 45% 8%;
+    --success: 152 55% 46%;
+    --success-foreground: 224 45% 8%;
+    --warning: 32 95% 56%;
+    --warning-foreground: 224 45% 8%;
+
+    --border: 223 28% 20%;
+    --input: 223 28% 22%;
+    --ring: 243 80% 66%;
+
+    --sidebar: 224 44% 10%;
+    --sidebar-foreground: 210 40% 92%;
+    --sidebar-muted: 215 20% 62%;
+    --sidebar-active: 243 45% 20%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  ::selection {
+    @apply bg-primary/20 text-foreground;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring/60 ring-offset-2 ring-offset-background;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full border-2 border-transparent bg-muted-foreground/25 bg-clip-padding;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted-foreground/40;
+  }
+}
+
+@layer components {
+  /* 品牌渐变 */
+  .gradient-brand {
+    @apply bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500;
+  }
+  .gradient-text {
+    @apply bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 bg-clip-text text-transparent;
+  }
+  .gradient-soft {
+    @apply bg-gradient-to-br from-indigo-500/10 via-violet-500/5 to-sky-500/10;
+  }
+
+  /* 玻璃拟态面板 */
+  .glass {
+    @apply border border-white/40 bg-white/70 backdrop-blur-xl dark:border-white/10 dark:bg-white/5;
+  }
+
+  .card-hover {
+    @apply transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card;
+  }
+
+  /* 后台侧边栏链接 */
+  .sidebar-link {
+    @apply flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-muted transition-colors hover:bg-secondary hover:text-sidebar-foreground;
+  }
+  .sidebar-link-active {
+    @apply bg-sidebar-active text-accent-foreground hover:bg-sidebar-active hover:text-accent-foreground;
+  }
+
+  /* 后台主内容区背景装饰 */
+  .admin-canvas {
+    background-image:
+      radial-gradient(circle at 15% 0%, hsl(var(--primary) / 0.06), transparent 45%),
+      radial-gradient(circle at 85% 10%, hsl(199 89% 48% / 0.05), transparent 40%);
+  }
+
+  /* 门户首屏网格背景 */
+  .hero-mesh {
+    background-image:
+      radial-gradient(circle at 20% 20%, hsl(var(--primary) / 0.14), transparent 42%),
+      radial-gradient(circle at 80% 0%, hsl(199 89% 48% / 0.12), transparent 46%),
+      radial-gradient(circle at 60% 85%, hsl(280 80% 60% / 0.08), transparent 50%);
+  }
+  .dot-grid {
+    background-image: radial-gradient(hsl(var(--muted-foreground) / 0.22) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  /* 骨架屏 */
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-muted;
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/50 to-transparent dark:via-white/10;
+  }
+
+  /* 表格 */
+  .data-table {
+    @apply w-full caption-bottom text-sm;
+  }
+  .data-table th {
+    @apply h-11 whitespace-nowrap px-4 text-left align-middle text-xs font-semibold uppercase tracking-wide text-muted-foreground;
+  }
+  .data-table td {
+    @apply px-4 py-3.5 align-middle;
+  }
+  .data-table tbody tr {
+    @apply border-b border-border/70 transition-colors hover:bg-muted/50;
+  }
+  .data-table tbody tr:last-child {
+    @apply border-b-0;
+  }
+
+  /* 富文本正文（门户文章详情 / 栏目页） */
+  .prose-wmcms {
+    @apply text-[15.5px] leading-8 text-foreground/85;
+  }
+  .prose-wmcms > * + * {
+    @apply mt-5;
+  }
+  .prose-wmcms h2 {
+    @apply mt-12 scroll-mt-24 text-[1.4rem] font-semibold tracking-tight text-foreground;
+  }
+  .prose-wmcms h3 {
+    @apply mt-9 scroll-mt-24 text-[1.15rem] font-semibold tracking-tight text-foreground;
+  }
+  .prose-wmcms h4 {
+    @apply mt-8 scroll-mt-24 text-base font-semibold text-foreground;
+  }
+  .prose-wmcms p {
+    @apply leading-8;
+  }
+  .prose-wmcms a {
+    @apply font-medium text-primary underline decoration-primary/30 underline-offset-4 transition-colors hover:decoration-primary;
+  }
+  .prose-wmcms strong {
+    @apply font-semibold text-foreground;
+  }
+  .prose-wmcms ul {
+    @apply list-disc space-y-2 pl-6;
+  }
+  .prose-wmcms ol {
+    @apply list-decimal space-y-2 pl-6;
+  }
+  .prose-wmcms li > p {
+    @apply my-1;
+  }
+  .prose-wmcms blockquote {
+    @apply rounded-r-lg border-l-4 border-primary/40 bg-primary/5 px-5 py-3 text-muted-foreground;
+  }
+  .prose-wmcms pre {
+    @apply overflow-x-auto rounded-xl bg-slate-950 p-5 text-[13px] leading-6 text-slate-100;
+  }
+  .prose-wmcms code {
+    @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] text-primary;
+  }
+  .prose-wmcms pre code {
+    @apply bg-transparent p-0 text-inherit;
+  }
+  .prose-wmcms img {
+    @apply rounded-xl border border-border;
+  }
+  .prose-wmcms hr {
+    @apply my-10 border-border;
+  }
+  .prose-wmcms table {
+    @apply w-full border-collapse overflow-hidden rounded-lg text-sm;
+  }
+  .prose-wmcms th {
+    @apply border-b border-border bg-muted px-4 py-2 text-left font-semibold;
+  }
+  .prose-wmcms td {
+    @apply border-b border-border/60 px-4 py-2;
+  }
+  .prose-wmcms iframe {
+    @apply aspect-video w-full rounded-xl;
+  }
+
+  /* TipTap 编辑器 */
+  .wmcms-editor .ProseMirror {
+    @apply min-h-[440px] outline-none;
+  }
+  .wmcms-editor .ProseMirror p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    @apply pointer-events-none float-left h-0 text-muted-foreground;
+  }
+  .wmcms-editor .ProseMirror-selectednode {
+    @apply ring-2 ring-primary/40;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .mask-fade-b {
+    mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
+  }
+}

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: 类型检查 / 构建 / E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: true
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 启用 pnpm（corepack）
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.24.0 --activate
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 获取 pnpm store 路径
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: 缓存 pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 准备环境变量
+        run: |
+          cp apps/api/.env.example apps/api/.env
+          cp apps/web/.env.example apps/web/.env.local
+
+      - name: 构建共享类型包
+        run: pnpm build:shared
+
+      - name: 类型检查
+        run: pnpm typecheck
+
+      - name: 生产构建
+        run: pnpm build
+
+      - name: 初始化测试数据库
+        run: |
+          pnpm --filter @wmcms/api db:push
+          pnpm --filter @wmcms/api db:seed
+
+      - name: API E2E 测试
+        run: pnpm --filter @wmcms/api test
