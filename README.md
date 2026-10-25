@@ -75,7 +75,7 @@ wmcms/
 │        └─ lib/                # api 客户端、服务端取数、站点解析、token
 ├─ packages/shared/             # 共享类型 + 权限 + 主题/套餐常量 + 插件清单
 ├─ docs/                        # NOVEL_API / ARCHITECTURE / DEVELOPMENT / API_CONTRACT（旧 CMS）
-└─ scripts/                     # 封面生成、移动端溢出检查、后台 CDP 验收
+└─ scripts/                     # 一键安装（install.sh/install.ps1，含环境检测）、封面生成、移动端溢出检查、后台 CDP 验收
 ```
 
 ## 🚀 快速开始
@@ -93,6 +93,40 @@ bash deploy/deploy-linux.sh --seed
 ```
 
 参数：`-Seed`（演示数据）、`-SkipInstall`、`-NoBuild`、`-NoStart`、`-FreshEnv`、`-PublicUrl`、`-ApiPort/-WebPort`；停止/重启见 [`deploy/stop-windows.ps1`](deploy/stop-windows.ps1) / [`deploy/start-windows.ps1`](deploy/start-windows.ps1)，详见 [使用手册 §7](docs/使用手册.md#7-部署与运维)。
+
+### 一键拉取并安装（Docker，自动环境检测）
+
+无需先克隆仓库：脚本会**自动检测环境 → 拉取/更新代码 → 生成随机密钥 → 构建并启动 → 健康检查**，
+并在不满足条件时给出明确的修复提示。
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/544735/xhcms-novel/main/scripts/install.sh | bash
+```
+
+```powershell
+# Windows（PowerShell 5.1+）
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/544735/xhcms-novel/main/scripts/install.ps1 | iex"
+```
+
+仅检测环境、不做任何修改（环境不满足时以非零码退出）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/544735/xhcms-novel/main/scripts/install.sh | bash -s -- --check
+```
+```powershell
+powershell -ExecutionPolicy Bypass -c "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/544735/xhcms-novel/main/scripts/install.ps1))) -Check"
+```
+
+自动检测项：操作系统/架构、Git、Node.js（≥ 20）、Docker 版本与**守护进程状态**、Docker Compose v2、
+目标端口 3000/4000 占用、目标目录是否已有仓库（有则改为增量更新）；安装后轮询健康检查，失败自动输出容器日志。
+
+- 安装目录默认 `./xhcms-novel`，可用 `XHCMS_DIR` 覆盖；仓库/分支可用 `XHCMS_REPO_URL` / `XHCMS_BRANCH` 覆盖。
+- 首次安装自动生成 `POSTGRES_PASSWORD` 与三个 JWT 密钥；初始管理员口令写入数据卷
+  `/data/.seed-credentials.txt`，首次登录后请改密并删除。
+- 后台还提供可视化入口：登录后访问 **`/admin/about`**（系统 → 关于与安装），可直接复制上述命令。
+
+> 说明：本节脚本使用 Docker Compose + PostgreSQL；上方 `deploy/*.ps1` / `deploy/*.sh` 是传统的原生 Node 部署方式。
 
 ### 手动部署
 
