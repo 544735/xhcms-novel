@@ -21,9 +21,9 @@ const testDatabaseUrl =
 if (process.env.NODE_ENV === 'production') {
   throw new Error('拒绝在 NODE_ENV=production 下运行 e2e：测试会重置数据库');
 }
-if (!/^postgres(ql)?:\/\//.test(testDatabaseUrl)) {
+if (!/^(postgres(ql)?|mysql):\/\//.test(testDatabaseUrl)) {
   throw new Error(
-    `e2e 需要 PostgreSQL 连接串（当前：${testDatabaseUrl}）。请先执行 docker compose -f docker-compose.infra.yml up -d`,
+    `e2e 需要 PostgreSQL 或 MySQL 连接串（当前：${testDatabaseUrl}）。PG 可用 pnpm infra:up；MySQL 用 TEST_DATABASE_URL 指定`,
   );
 }
 
@@ -38,11 +38,13 @@ process.env.PORT = '0';
 process.env.CORS_ORIGINS = 'http://localhost:3000';
 
 const childEnv = { ...process.env, NODE_ENV: 'test', DATABASE_URL: testDatabaseUrl };
+// 双库可选：默认 prisma/（PostgreSQL）；PRISMA_SCHEMA=prisma-mysql/schema.prisma 时切到 MySQL
+const schemaFlag = process.env.PRISMA_SCHEMA ? ` --schema ${process.env.PRISMA_SCHEMA}` : '';
 
-// 重建 schema（应用全部迁移，含 pg_trgm / 部分唯一索引）并写入种子数据
-execSync('pnpm exec prisma migrate reset --force --skip-generate --skip-seed', {
+// 重建 schema（应用全部迁移：PG 的 trgm/部分唯一索引，或 MySQL 的生成列唯一索引）并写入种子数据
+execSync(`pnpm exec prisma migrate reset --force --skip-generate --skip-seed${schemaFlag}`, {
   cwd: apiRoot,
   env: childEnv,
   stdio: 'inherit',
 });
-execSync('pnpm exec prisma db seed', { cwd: apiRoot, env: childEnv, stdio: 'inherit' });
+execSync(`pnpm exec prisma db seed${schemaFlag}`, { cwd: apiRoot, env: childEnv, stdio: 'inherit' });

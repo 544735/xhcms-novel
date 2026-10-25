@@ -1,0 +1,639 @@
+// XHCMS 2.0 数据模型
+// 数据库：PostgreSQL 16（生产/开发/E2E 统一）；结构化数据仍以 JSON 字符串存储（String），
+// 以保持与既有 service 层 JSON.parse/stringify 代码兼容。
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/* ============================ 站点 / 主题 ============================ */
+
+model Site {
+  id             String   @id @default(cuid())
+  name           String
+  slug           String   @unique
+  domain         String?  @unique
+  themeKey       String   @default("modern")
+  logo           String?
+  description String? @db.Text
+  seoTitle String? @db.Text
+  seoKeywords String? @db.Text
+  seoDescription String? @db.Text
+  status         String   @default("enabled")
+  settings String? @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  categories Category[]
+  articles   Article[]
+  tags       Tag[]
+  media      Media[]
+  members    Member[]
+  comments   Comment[]
+  forms      Form[]
+  settingsKV Setting[]
+  userSites  UserSite[]
+
+  novels        Novel[]
+  novelComments NovelComment[]
+  bookSources   BookSource[]
+  collectTasks  CollectTask[]
+}
+
+model Theme {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String   @default("")
+  preview     String?
+  builtin     Boolean  @default(true)
+  config String? @db.Text
+  sort        Int      @default(0)
+  createdAt   DateTime @default(now())
+}
+
+/* ============================ 账号 / 权限 ============================ */
+
+model User {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  email        String    @unique
+  password     String
+  nickname     String?
+  avatar String? @db.Text
+  status       String    @default("active")
+  /// 令牌版本：改密/登出/禁用时自增，使旧令牌失效
+  tokenVersion Int       @default(0)
+  isSuperAdmin Boolean   @default(false)
+  lastLoginAt  DateTime?
+  lastLoginIp  String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  roles     UserRole[]
+  userSites UserSite[]
+  articles  Article[]  @relation("ArticleAuthor")
+  auditLogs AuditLog[]
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String
+  code        String   @unique
+  description String? @db.Text
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       UserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id    String @id @default(cuid())
+  code  String @unique
+  name  String
+  group String
+
+  roles RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model UserSite {
+  userId String
+  siteId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  site   Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@id([userId, siteId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  username   String?
+  action     String
+  resource   String
+  resourceId String?
+  detail String? @db.Text
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([userId])
+}
+
+/* ============================ 内容 ============================ */
+
+model Category {
+  id             String   @id @default(cuid())
+  siteId         String
+  parentId       String?
+  name           String
+  slug           String
+  type           String   @default("article") // article | page
+  description String? @db.Text
+  icon           String?
+  sort           Int      @default(0)
+  status         String   @default("enabled")
+  seoTitle String? @db.Text
+  seoKeywords String? @db.Text
+  seoDescription String? @db.Text
+  content String? @db.LongText
+  template       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  site     Site       @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryTree")
+  articles Article[]
+  novels   Novel[]
+
+  @@unique([siteId, slug])
+  @@index([siteId, parentId])
+}
+
+model Article {
+  id             String    @id @default(cuid())
+  siteId         String
+  categoryId     String?
+  title String @db.Text
+  slug           String
+  summary String? @db.Text
+  content String @db.LongText
+  cover String? @db.Text
+  status         String    @default("draft") // draft | published | scheduled | archived
+  isTop          Boolean   @default(false)
+  isRecommend    Boolean   @default(false)
+  views          Int       @default(0)
+  sort           Int       @default(0)
+  authorId       String?
+  publishedAt    DateTime?
+  seoTitle String? @db.Text
+  seoKeywords String? @db.Text
+  seoDescription String? @db.Text
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  site     Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  category Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  author   User?        @relation("ArticleAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  tags     ArticleTag[]
+  comments Comment[]
+
+  @@unique([siteId, slug])
+  @@index([siteId, status, publishedAt])
+  @@index([siteId, categoryId])
+  @@index([siteId, isRecommend])
+}
+
+model Tag {
+  id        String   @id @default(cuid())
+  siteId    String
+  name      String
+  slug      String
+  createdAt DateTime @default(now())
+
+  site     Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  articles ArticleTag[]
+
+  @@unique([siteId, slug])
+}
+
+model ArticleTag {
+  articleId String
+  tagId     String
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([articleId, tagId])
+}
+
+model Media {
+  id           String   @id @default(cuid())
+  siteId       String
+  filename     String
+  originalName String @db.Text
+  mimeType     String
+  size         Int
+  width        Int?
+  height       Int?
+  url String @db.Text
+  folder       String?
+  uploadedById String?
+  createdAt    DateTime @default(now())
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([siteId, createdAt])
+}
+
+/* ============================ 会员 / 互动 ============================ */
+
+model Member {
+  id          String    @id @default(cuid())
+  siteId      String
+  username    String
+  email       String
+  password    String
+  nickname    String?
+  avatar String? @db.Text
+  status      String    @default("active")
+  /// 令牌版本：改密/重置密码/禁用时自增，使旧令牌失效
+  tokenVersion Int      @default(0)
+  points      Int       @default(0)
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  site     Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  comments Comment[]
+
+  wallet       Wallet?
+  bookshelf    Bookshelf[]
+  progresses   ReadingProgress[]
+  orders       Order[]
+  transactions CoinTransaction[]
+  unlocks      ChapterUnlock[]
+  novelComments NovelComment[]
+  novels       Novel[]        @relation("NovelAuthor")
+  authorProfile AuthorProfile?
+
+  @@unique([siteId, username])
+  @@unique([siteId, email])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  siteId    String
+  articleId String
+  memberId  String?
+  parentId  String?
+  nickname  String
+  email     String?
+  content String @db.LongText
+  status    String   @default("pending") // pending | approved | rejected
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  site     Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  article  Article   @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  member   Member?   @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  parent   Comment?  @relation("CommentTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children Comment[] @relation("CommentTree")
+
+  @@index([siteId, status, createdAt])
+  @@index([articleId, status])
+}
+
+model Form {
+  id             String   @id @default(cuid())
+  siteId         String
+  name           String
+  slug           String
+  description String? @db.Text
+  fields String @db.Text // JSON: FormField[]
+  status         String   @default("enabled")
+  successMessage String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  site        Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  submissions FormSubmission[]
+
+  @@unique([siteId, slug])
+}
+
+model FormSubmission {
+  id        String   @id @default(cuid())
+  formId    String
+  data String @db.Text // JSON: Record<string, unknown>
+  ip        String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([formId, createdAt])
+}
+
+/* ============================ 设置 / 插件 ============================ */
+
+model Setting {
+  id        String   @id @default(cuid())
+  siteId    String?
+  key       String
+  value String? @db.Text
+  group     String   @default("general")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  site Site? @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, key])
+  @@index([siteId, group])
+}
+
+model Plugin {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  version     String   @default("1.0.0")
+  description String   @default("")
+  author      String   @default("XHCMS Team")
+  enabled     Boolean  @default(false)
+  builtin     Boolean  @default(true)
+  hooks String? @db.Text // JSON: string[]
+  config String? @db.Text // JSON: Record<string, unknown>
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+/* ============================ 小说领域 ============================ */
+
+model Novel {
+  id             String    @id @default(cuid())
+  siteId         String
+  categoryId     String?
+  authorId       String? // 作者账号（User）
+  authorName     String // 展示笔名
+  title String @db.Text
+  slug           String
+  cover String? @db.Text
+  summary String? @db.Text
+  status         String    @default("serial") // serial | completed
+  auditStatus    String    @default("published") // pending | published | rejected | offline
+  isRecommend    Boolean   @default(false)
+  isTop          Boolean   @default(false)
+  words          Int       @default(0)
+  chapterCount   Int       @default(0)
+  views          Int       @default(0)
+  favorites      Int       @default(0)
+  vipOnly        Boolean   @default(false)
+  publishedAt    DateTime?
+  lastChapterAt  DateTime?
+  seoTitle String? @db.Text
+  seoKeywords String? @db.Text
+  seoDescription String? @db.Text
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  site       Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  category   Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  author     Member?          @relation("NovelAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  volumes    Volume[]
+  chapters   Chapter[]
+  bookshelf  Bookshelf[]
+  progresses ReadingProgress[]
+  comments   NovelComment[]
+  collectTasks CollectTask[]
+
+  @@unique([siteId, slug])
+  @@index([siteId, auditStatus, updatedAt])
+  @@index([siteId, categoryId])
+  @@index([siteId, isRecommend])
+  @@index([siteId, status])
+  // 榜单（热度 / 收藏 / 最新）排序走索引，避免全表排序
+  @@index([siteId, auditStatus, views])
+  @@index([siteId, auditStatus, favorites])
+  @@index([siteId, auditStatus, publishedAt])
+}
+
+model Volume {
+  id        String   @id @default(cuid())
+  novelId   String
+  title String @db.Text
+  sort      Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  novel    Novel     @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  chapters Chapter[]
+
+  @@index([novelId, sort])
+}
+
+model Chapter {
+  id          String    @id @default(cuid())
+  novelId     String
+  volumeId    String?
+  chapterNo   Int
+  title String @db.Text
+  content String @db.LongText
+  wordCount   Int       @default(0)
+  isVip       Boolean   @default(false)
+  price       Int       @default(0) // 阅读本章所需书币
+  status      String    @default("published") // draft | published
+  views       Int       @default(0)
+  publishedAt DateTime?
+  sourceUrl String? @db.VarChar(500) // 采集来源章节地址：幂等去重 + 追更定位（手工章节为 null）
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  novel    Novel          @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  volume   Volume?        @relation(fields: [volumeId], references: [id], onDelete: SetNull)
+  unlocks  ChapterUnlock[]
+  comments NovelComment[]
+
+  @@unique([novelId, chapterNo])
+  // 可空唯一列在多行 NULL 时互不冲突：手工/JSON 源章节（无 sourceUrl）不受影响
+  @@unique([novelId, sourceUrl])
+  @@index([novelId, status, chapterNo])
+}
+
+model Bookshelf {
+  id        String   @id @default(cuid())
+  memberId  String
+  novelId   String
+  createdAt DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  novel  Novel  @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, novelId])
+  @@index([novelId])
+}
+
+model ReadingProgress {
+  id         String   @id @default(cuid())
+  memberId   String
+  novelId    String
+  chapterId  String
+  chapterNo  Int
+  percent    Float    @default(0)
+  updatedAt  DateTime @updatedAt
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  novel  Novel  @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, novelId])
+  @@index([memberId, updatedAt])
+}
+
+model NovelComment {
+  id        String   @id @default(cuid())
+  siteId    String
+  novelId   String
+  chapterId String?
+  memberId  String?
+  parentId  String?
+  nickname  String
+  content String @db.LongText
+  status    String   @default("pending") // pending | approved | rejected
+  ip        String?
+  createdAt DateTime @default(now())
+
+  site     Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  novel    Novel     @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  chapter  Chapter?  @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  member   Member?   @relation(fields: [memberId], references: [id], onDelete: SetNull)
+  parent   NovelComment?  @relation("NovelCommentTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children NovelComment[] @relation("NovelCommentTree")
+
+  @@index([siteId, status, createdAt])
+  @@index([novelId, status])
+  @@index([chapterId, status])
+}
+
+model Wallet {
+  id        String   @id @default(cuid())
+  memberId  String   @unique
+  balance   Int      @default(0) // 书币
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+}
+
+model CoinTransaction {
+  id        String   @id @default(cuid())
+  memberId  String
+  type      String // recharge | consume | refund | reward
+  amount    Int
+  balance   Int
+  refType   String?
+  refId     String?
+  remark String? @db.Text
+  createdAt DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Restrict) // 账务凭据不得随会员级联消失
+
+  @@index([memberId, createdAt])
+}
+
+model Order {
+  id          String    @id @default(cuid())
+  memberId    String
+  orderNo     String    @unique
+  amountCents Int
+  coins       Int
+  status      String    @default("pending") // pending | paid | cancelled
+  channel     String    @default("mock") // mock | alipay | wechat
+  paidAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Restrict) // 充值订单不得随会员级联消失
+
+  @@index([memberId, createdAt])
+  @@index([status, createdAt])
+}
+
+model ChapterUnlock {
+  id        String   @id @default(cuid())
+  memberId  String
+  chapterId String? // 章节被删除后置空（SetNull），凭快照字段识别已购
+  coins     Int      @default(0)
+  // 章节快照：章节被删除/重建（采集重导导致 id 变化）后仍能凭 (novelId, chapterNo) 识别已购
+  novelId   String?
+  chapterNo Int?
+  title String? @db.Text
+  createdAt DateTime @default(now())
+
+  member  Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  chapter Chapter? @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+
+  // 可空唯一在 PostgreSQL/SQLite 下允许多行 NULL（章节被删后不会撞唯一约束）
+  @@unique([memberId, chapterId])
+  @@index([memberId, createdAt])
+  @@index([memberId, novelId, chapterNo])
+}
+
+model AuthorProfile {
+  id           String    @id @default(cuid())
+  memberId     String    @unique
+  penName      String    @unique
+  bio          String?
+  status       String    @default("pending") // pending | approved | rejected
+  contact      String?
+  appliedAt    DateTime  @default(now())
+  reviewedAt   DateTime?
+  rejectReason String?
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+}
+
+model BookSource {
+  id        String    @id @default(cuid())
+  siteId    String
+  name      String
+  type      String    @default("html") // html | json
+  baseUrl String @db.Text
+  listUrl String? @db.Text // 列表页模板（JSON 模式：返回书籍列表的 URL）
+  selectors String? @db.Text // JSON: 采集选择器/字段映射
+  enabled   Boolean   @default(true)
+  lastRunAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  site   Site          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  tasks  CollectTask[]
+
+  @@index([siteId, createdAt])
+}
+
+model CollectTask {
+  id         String    @id @default(cuid())
+  siteId     String
+  sourceId   String?
+  novelId    String?
+  mode       String    @default("chapters") // book | chapters
+  status     String    @default("pending") // pending | running | success | partial | failed
+  total      Int       @default(0)
+  succeeded  Int       @default(0)
+  failed     Int       @default(0)
+  message String? @db.Text
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  site   Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  source BookSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  novel  Novel?      @relation(fields: [novelId], references: [id], onDelete: SetNull)
+
+  @@index([siteId, createdAt])
+}
