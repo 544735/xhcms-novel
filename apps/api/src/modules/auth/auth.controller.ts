@@ -27,8 +27,8 @@ export class AuthController {
   @Public()
   @Post('refresh')
   @ApiOperation({ summary: '用刷新令牌换取新的访问令牌' })
-  refresh(@Body() dto: RefreshTokenDto): Promise<RefreshResult> {
-    return this.authService.refresh(dto);
+  refresh(@Body() dto: RefreshTokenDto, @Req() req: AuthenticatedRequest): Promise<RefreshResult> {
+    return this.authService.refresh(dto, req);
   }
 
   @Get('profile')

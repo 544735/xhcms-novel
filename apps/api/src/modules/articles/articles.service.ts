@@ -40,6 +40,17 @@ import type { UpdateArticleDto } from './dto/update-article.dto';
 
 /* ----------------------------- 查询片段 / 映射 ----------------------------- */
 
+/** 插件渲染结果的长度上限（约 500KB），防止插件返回超大 HTML 拖垮响应 */
+const MAX_RENDERED_CONTENT_LENGTH = 500_000;
+
+/** 自动生成 slug 撞唯一约束时的最大尝试次数（含首次） */
+const SLUG_MAX_ATTEMPTS = 3;
+
+/** 唯一约束冲突（P2002）：并发创建同名 slug 时的兜底判断 */
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
 export const articleInclude = {
   category: { select: { id: true, name: true, slug: true } },
   author: { select: { username: true, nickname: true } },
@@ -190,33 +201,46 @@ export class ArticlesService {
       summary = sanitizePlainText(hookResult.summary, 500);
     }
 
-    const slug = await this.resolveSlug(dto.slug, title, siteId);
     const status = dto.status ?? 'draft';
     const publishedAt = this.resolvePublishedAt(dto.publishedAt, status, null);
     const tagIds = await this.validateTagIds(dto.tagIds, siteId);
 
-    const row = await this.prisma.article.create({
-      data: {
-        siteId,
-        categoryId: dto.categoryId ?? null,
-        title,
-        slug,
-        summary,
-        content,
-        cover: textOrNull(dto.cover, 500),
-        status,
-        isTop: dto.isTop ?? false,
-        isRecommend: dto.isRecommend ?? false,
-        sort: dto.sort ?? 0,
-        authorId: auth.id,
-        publishedAt,
-        seoTitle: textOrNull(dto.seoTitle, 200),
-        seoKeywords: textOrNull(dto.seoKeywords, 500),
-        seoDescription: textOrNull(dto.seoDescription, 500),
-        tags: { create: tagIds.map((tagId) => ({ tagId })) },
-      },
-      include: articleInclude,
+    const buildData = (slug: string): Prisma.ArticleUncheckedCreateInput => ({
+      siteId,
+      categoryId: dto.categoryId ?? null,
+      title,
+      slug,
+      summary,
+      content,
+      cover: textOrNull(dto.cover, 500),
+      status,
+      isTop: dto.isTop ?? false,
+      isRecommend: dto.isRecommend ?? false,
+      sort: dto.sort ?? 0,
+      authorId: auth.id,
+      publishedAt,
+      seoTitle: textOrNull(dto.seoTitle, 200),
+      seoKeywords: textOrNull(dto.seoKeywords, 500),
+      seoDescription: textOrNull(dto.seoDescription, 500),
+      tags: { create: tagIds.map((tagId) => ({ tagId })) },
     });
+
+    let slug = await this.resolveSlug(dto.slug, title, siteId);
+    let row: ArticleRow | undefined;
+    // 唯一约束竞态兜底：自动生成的 slug 撞 P2002 时换新候选重试（≤3 次）；
+    // 用户显式指定的 slug 不做自动改号，直接 409。
+    for (let attempt = 0; attempt < SLUG_MAX_ATTEMPTS && !row; attempt += 1) {
+      try {
+        row = await this.prisma.article.create({ data: buildData(slug), include: articleInclude });
+      } catch (error) {
+        if (!isUniqueConstraintError(error)) throw error;
+        if (dto.slug || attempt === SLUG_MAX_ATTEMPTS - 1) {
+          throw new ConflictException('slug 已存在，请更换');
+        }
+        slug = await this.resolveSlug(undefined, title, siteId);
+      }
+    }
+    if (!row) throw new ConflictException('slug 已存在，请更换');
 
     await this.audit.log(req, {
       action: 'article.create',
@@ -272,18 +296,27 @@ export class ArticlesService {
     const tagIds =
       dto.tagIds !== undefined ? await this.validateTagIds(dto.tagIds, siteId) : undefined;
 
-    const row = await this.prisma.$transaction(async (tx) => {
-      await tx.article.update({ where: { id }, data });
-      if (tagIds !== undefined) {
-        await tx.articleTag.deleteMany({ where: { articleId: id } });
-        if (tagIds.length) {
-          await tx.articleTag.createMany({
-            data: tagIds.map((tagId) => ({ articleId: id, tagId })),
-          });
+    let row: ArticleRow;
+    try {
+      row = await this.prisma.$transaction(async (tx) => {
+        await tx.article.update({ where: { id }, data });
+        if (tagIds !== undefined) {
+          await tx.articleTag.deleteMany({ where: { articleId: id } });
+          if (tagIds.length) {
+            await tx.articleTag.createMany({
+              data: tagIds.map((tagId) => ({ articleId: id, tagId })),
+            });
+          }
         }
+        return tx.article.findUniqueOrThrow({ where: { id }, include: articleInclude });
+      });
+    } catch (error) {
+      // 并发改到同一个 slug 时唯一约束抛 P2002 → 409，而不是冒泡成通用错误
+      if (isUniqueConstraintError(error)) {
+        throw new ConflictException('slug 已存在，请更换');
       }
-      return tx.article.findUniqueOrThrow({ where: { id }, include: articleInclude });
-    });
+      throw error;
+    }
 
     await this.audit.log(req, {
       action: 'article.update',
@@ -470,11 +503,8 @@ export class ArticlesService {
         select: { id: true },
       });
       if (!category) return paginate([], 0, page, pageSize);
-      const children = await this.prisma.category.findMany({
-        where: { parentId: category.id },
-        select: { id: true },
-      });
-      where.categoryId = { in: [category.id, ...children.map((child) => child.id)] };
+      // 取整棵子树（原来只取直接子级，三层栏目下父栏目页会漏文章）
+      where.categoryId = { in: await this.collectCategorySubtree(site.id, category.id) };
     }
 
     if (query.tagSlug) {
@@ -517,8 +547,11 @@ export class ArticlesService {
       article: { id: article.id, title: article.title, slug: article.slug },
       site: toPublicSite(site),
     });
+    // 插件返回的 HTML 同样不可信：必须重新过白名单并限长，否则插件即全站 XSS 入口
     const content =
-      typeof hookResult.content === 'string' ? hookResult.content : sanitized;
+      typeof hookResult.content === 'string'
+        ? sanitizeContent(hookResult.content).slice(0, MAX_RENDERED_CONTENT_LENGTH)
+        : sanitized;
     const toc: TocItem[] = Array.isArray(hookResult.toc) ? (hookResult.toc as TocItem[]) : [];
     const readingTime =
       typeof hookResult.readingTime === 'number' && hookResult.readingTime > 0
@@ -641,14 +674,17 @@ export class ArticlesService {
     const keyword = query.q?.trim();
     if (!keyword) return paginate([], 0, page, pageSize);
 
+    // 正文 LIKE 无法走索引：单字关键词命中率极高，只会放大全表扫描，故仅在 ≥2 字时参与
+    const or: Prisma.ArticleWhereInput[] = [
+      { title: { contains: keyword } },
+      { summary: { contains: keyword } },
+    ];
+    if (keyword.length >= 2) or.push({ content: { contains: keyword } });
+
     const where: Prisma.ArticleWhereInput = {
       siteId: site.id,
       status: 'published',
-      OR: [
-        { title: { contains: keyword } },
-        { summary: { contains: keyword } },
-        { content: { contains: keyword } },
-      ],
+      OR: or,
     };
 
     const [total, rows] = await this.prisma.$transaction([
@@ -808,6 +844,37 @@ export class ArticlesService {
       select: { id: true },
     });
     if (!category) throw new BadRequestException('栏目不存在或不属于当前站点');
+  }
+
+  /**
+   * 取栏目整棵子树的 id（含自身）。
+   * 一次查全站父子关系后在内存里 BFS：避免逐层 N 次查询，
+   * 并用 visited 集合兜住脏数据成环（否则 while 会死循环）。
+   */
+  private async collectCategorySubtree(siteId: string, rootId: string): Promise<string[]> {
+    const rows = await this.prisma.category.findMany({
+      where: { siteId },
+      select: { id: true, parentId: true },
+    });
+    const childrenByParent = new Map<string, string[]>();
+    for (const row of rows) {
+      if (!row.parentId) continue;
+      const list = childrenByParent.get(row.parentId) ?? [];
+      list.push(row.id);
+      childrenByParent.set(row.parentId, list);
+    }
+
+    const result: string[] = [];
+    const visited = new Set<string>();
+    const queue: string[] = [rootId];
+    while (queue.length) {
+      const current = queue.shift() as string;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      result.push(current);
+      queue.push(...(childrenByParent.get(current) ?? []));
+    }
+    return result;
   }
 
   private async resolveSlug(

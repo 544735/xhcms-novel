@@ -81,12 +81,32 @@ function buildUrl(path: string, query?: Record<string, QueryValue>): string {
   return url.toString();
 }
 
+/** 单次请求超时（ms）：接口挂死时让调用方拿到可处理的错误，而不是无限 loading */
+const REQUEST_TIMEOUT_MS = 10_000;
+
+/** 给 fetch 挂默认超时；调用方自带 signal 时与超时 signal 合并 */
+function withTimeout(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+/** 令牌已确定失效：清理本地令牌并广播，由 AuthGuard 统一跳转登录页 */
+function notifyAuthExpired(): void {
+  tokenStorage.clear();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('auth:expired'));
+  }
+}
+
 let refreshInFlight: Promise<boolean> | null = null;
 
 async function refreshTokens(): Promise<boolean> {
   if (refreshInFlight) return refreshInFlight;
   const refreshToken = tokenStorage.getRefresh();
-  if (!refreshToken) return false;
+  if (!refreshToken) {
+    notifyAuthExpired();
+    return false;
+  }
 
   refreshInFlight = (async () => {
     try {
@@ -94,13 +114,23 @@ async function refreshTokens(): Promise<boolean> {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
-      if (!response.ok) return false;
+      if (!response.ok) {
+        // 刷新令牌被拒（过期 / 已被轮换 / 已吊销）→ 会话确定失效
+        notifyAuthExpired();
+        return false;
+      }
       const payload = (await response.json()) as ApiResponse<RefreshResult>;
-      if (!payload?.data?.accessToken) return false;
+      if (!payload?.data?.accessToken) {
+        notifyAuthExpired();
+        return false;
+      }
       tokenStorage.set(payload.data.accessToken, payload.data.refreshToken);
       return true;
     } catch {
+      // 网络异常 / 超时 ≠ 会话失效：保留令牌，下一次请求自然重试。
+      // 这里不清令牌是刻意的，否则弱网或 10s 超时会把用户直接登出。
       return false;
     } finally {
       refreshInFlight = null;
@@ -124,7 +154,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       method,
       headers,
       body: formData ?? (body !== undefined ? JSON.stringify(body) : undefined),
-      signal,
+      signal: withTimeout(signal),
     });
   };
 
@@ -478,17 +508,6 @@ import type {
   WalletInfo,
 } from '@wmcms/shared';
 
-const MEMBER_TOKEN_STORAGE_KEY = 'wmcms:member_token';
-
-function memberToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window.localStorage.getItem(MEMBER_TOKEN_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
 /** 门户会员接口请求（Bearer 会员令牌，自动解包响应信封） */
 async function memberRequest<T>(
   path: string,
@@ -501,7 +520,8 @@ async function memberRequest<T>(
 ): Promise<T> {
   const { method = 'GET', body, query, auth = true } = options;
   const headers: Record<string, string> = { Accept: 'application/json' };
-  const token = memberToken();
+  // 会员令牌统一由 lib/tokens 管理，避免同一存储键在多处硬编码后漂移
+  const token = tokenStorage.getMemberToken();
   if (auth && token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
@@ -509,12 +529,12 @@ async function memberRequest<T>(
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   const contentType = response.headers.get('content-type') ?? '';
-  const payload: unknown = contentType.includes('application/json')
-    ? await response.json().catch(() => null)
-    : null;
+  const isJson = contentType.includes('application/json');
+  const payload: unknown = isJson ? await response.json().catch(() => null) : null;
 
   if (!response.ok) {
     const errorPayload = payload as { message?: string; errors?: string[]; requestId?: string } | null;
@@ -525,6 +545,14 @@ async function memberRequest<T>(
       errorPayload?.requestId,
     );
   }
+
+  // 2xx 但不是 JSON：多半是反向代理/网关错误页或登录重定向。
+  // 静默返回 null 会把故障伪装成「暂无数据」，调用方还会因 null 解引用而崩，
+  // 因此除 204/205（合法的空响应）外一律抛错。
+  if (!isJson && response.status !== 204 && response.status !== 205) {
+    throw new ApiError(response.status, '服务返回了非 JSON 响应（可能是网关错误页），请稍后重试');
+  }
+
   const envelope = payload as { data?: T } | null;
   return (envelope?.data ?? null) as T;
 }

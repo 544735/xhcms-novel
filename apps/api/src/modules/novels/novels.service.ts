@@ -3,6 +3,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -49,6 +50,11 @@ import {
 /** 未分卷章节在前端目录中的伪分卷 ID */
 const UNASSIGNED_VOLUME_ID = '__unassigned__';
 
+/** sitemaps.org 规范：单个 sitemap 文件最多 50000 条 URL */
+const SITEMAP_MAX_URLS = 50_000;
+/** 分类等轻量条目上限（防止异常数据挤占书籍/章节预算） */
+const SITEMAP_MAX_CATEGORIES = 5_000;
+
 function textOrNull(value: string | null | undefined, max: number): string | null {
   if (value === undefined || value === null) return null;
   const cleaned = sanitizePlainText(value, max);
@@ -57,6 +63,8 @@ function textOrNull(value: string | null | undefined, max: number): string | nul
 
 @Injectable()
 export class NovelsService {
+  private readonly logger = new Logger(NovelsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -168,28 +176,31 @@ export class NovelsService {
     const slug = await this.resolveSlug(dto.slug, title, siteId);
     const auditStatus = dto.auditStatus ?? 'published';
 
-    const row = await this.prisma.novel.create({
-      data: {
-        siteId,
-        categoryId: dto.categoryId ?? null,
-        authorId,
-        authorName,
-        title,
-        slug,
-        cover: textOrNull(dto.cover, 500),
-        summary,
-        status: dto.status ?? 'serial',
-        auditStatus,
-        isRecommend: dto.isRecommend ?? false,
-        isTop: dto.isTop ?? false,
-        vipOnly: dto.vipOnly ?? false,
-        publishedAt: auditStatus === 'published' ? new Date() : null,
-        seoTitle,
-        seoKeywords: textOrNull(dto.seoKeywords, 500),
-        seoDescription,
-      },
-      include: novelListInclude,
-    });
+    // 并发创建同名 slug 时唯一约束会抛 P2002，统一转 409（预检查无法覆盖竞态）
+    const row = await this.guardSlugConflict(() =>
+      this.prisma.novel.create({
+        data: {
+          siteId,
+          categoryId: dto.categoryId ?? null,
+          authorId,
+          authorName,
+          title,
+          slug,
+          cover: textOrNull(dto.cover, 500),
+          summary,
+          status: dto.status ?? 'serial',
+          auditStatus,
+          isRecommend: dto.isRecommend ?? false,
+          isTop: dto.isTop ?? false,
+          vipOnly: dto.vipOnly ?? false,
+          publishedAt: auditStatus === 'published' ? new Date() : null,
+          seoTitle,
+          seoKeywords: textOrNull(dto.seoKeywords, 500),
+          seoDescription,
+        },
+        include: novelListInclude,
+      }),
+    );
 
     await this.audit.log(req, {
       action: 'novel.create',
@@ -254,11 +265,13 @@ export class NovelsService {
       data.slug = await this.resolveSlug(dto.slug, title, siteId, current.slug);
     }
 
-    const row = await this.prisma.novel.update({
-      where: { id },
-      data,
-      include: novelListInclude,
-    });
+    const row = await this.guardSlugConflict(() =>
+      this.prisma.novel.update({
+        where: { id },
+        data,
+        include: novelListInclude,
+      }),
+    );
 
     await this.audit.log(req, {
       action: 'novel.update',
@@ -567,8 +580,12 @@ export class NovelsService {
           select: { chapterId: true, chapterNo: true, percent: true, updatedAt: true },
         }),
         this.prisma.chapterUnlock.findMany({
-          where: { memberId, chapter: { novelId: row.id } },
-          select: { chapterId: true },
+          where: {
+            memberId,
+            // 章节仍存在：按章节归属本书；章节已删除（chapterId 置空）：按快照 novelId 归属本书
+            OR: [{ chapter: { novelId: row.id } }, { novelId: row.id }],
+          },
+          select: { chapterId: true, chapterNo: true },
         }),
       ]);
       detail.inBookshelf = shelf !== null;
@@ -580,7 +597,23 @@ export class NovelsService {
             updatedAt: progress.updatedAt.toISOString(),
           }
         : null;
-      detail.unlockedChapterIds = unlocks.map((item) => item.chapterId);
+      // 已购章节：chapterId 命中现存章节的直接回传；快照命中（章节被删除/重建后 id 变化或置空）
+      // 按 chapterNo 映射回当前章节 id，保证目录页也显示「已购」
+      const chapterIdByNo = new Map<number, string>();
+      for (const volume of volumes) {
+        for (const chapter of volume.chapters) {
+          chapterIdByNo.set(chapter.chapterNo, chapter.id);
+        }
+      }
+      const unlockedIds = new Set<string>();
+      for (const unlock of unlocks) {
+        if (unlock.chapterId) unlockedIds.add(unlock.chapterId);
+        if (unlock.chapterNo !== null) {
+          const currentChapterId = chapterIdByNo.get(unlock.chapterNo);
+          if (currentChapterId) unlockedIds.add(currentChapterId);
+        }
+      }
+      detail.unlockedChapterIds = Array.from(unlockedIds);
     }
 
     return detail;
@@ -663,36 +696,49 @@ export class NovelsService {
     const site = await this.sites.resolvePublicSite(siteSlug);
     const baseUrl = this.resolveBaseUrl();
 
+    // take 兜底：即使超大站点也不会把全量数据读进内存
     const [novels, categories, chapters] = await Promise.all([
       this.prisma.novel.findMany({
         where: { siteId: site.id, auditStatus: 'published' },
         select: { slug: true, authorName: true },
         orderBy: { updatedAt: 'desc' },
+        take: SITEMAP_MAX_URLS,
       }),
       this.prisma.category.findMany({
         where: { siteId: site.id, type: 'novel', status: 'enabled' },
         select: { slug: true },
         orderBy: [{ sort: 'asc' }, { createdAt: 'asc' }],
+        take: SITEMAP_MAX_CATEGORIES,
       }),
       this.prisma.chapter.findMany({
         where: { status: 'published', novel: { siteId: site.id, auditStatus: 'published' } },
         select: { chapterNo: true, updatedAt: true, novel: { select: { slug: true } } },
-        orderBy: [{ novelId: 'asc' }, { chapterNo: 'asc' }],
+        // 超出上限时按 updatedAt desc 截断：优先保留最新章节
+        orderBy: { updatedAt: 'desc' },
+        take: SITEMAP_MAX_URLS,
       }),
     ]);
 
     const lastmodByPath = new Map<string, string>();
     const urls: string[] = ['/', '/books', '/rank'];
+    let truncated = 0;
+    const pushWithinLimit = (path: string): boolean => {
+      if (urls.length >= SITEMAP_MAX_URLS) {
+        truncated += 1;
+        return false;
+      }
+      urls.push(path);
+      return true;
+    };
     for (const category of categories) {
-      urls.push(`/category/${category.slug}`);
+      pushWithinLimit(`/category/${category.slug}`);
     }
     for (const novel of novels) {
-      urls.push(`/book/${novel.slug}`);
+      pushWithinLimit(`/book/${novel.slug}`);
     }
     for (const chapter of chapters) {
       const path = `/read/${chapter.novel.slug}/${chapter.chapterNo}`;
-      urls.push(path);
-      lastmodByPath.set(path, chapter.updatedAt.toISOString());
+      if (pushWithinLimit(path)) lastmodByPath.set(path, chapter.updatedAt.toISOString());
     }
 
     const authorNames = Array.from(
@@ -713,8 +759,19 @@ export class NovelsService {
         )
       : [];
     const merged = Array.from(new Set([...urls, ...extra]));
+    // sitemaps.org 规范：单个 sitemap 文件最多 50000 条 URL；超出按 updatedAt desc 保留最新并告警
+    const overflow = merged.length - SITEMAP_MAX_URLS;
+    if (truncated > 0 || overflow > 0) {
+      const reasons: string[] = [];
+      if (truncated > 0) reasons.push(`查询结果按 updatedAt desc 截断 ${truncated} 条`);
+      if (overflow > 0) reasons.push(`合并去重后超出 ${overflow} 条`);
+      this.logger.warn(
+        `sitemap 达到 ${SITEMAP_MAX_URLS} 条上限（${reasons.join('，')}）：site=${site.slug}`,
+      );
+    }
+    const limited = merged.slice(0, SITEMAP_MAX_URLS);
 
-    const body = merged
+    const body = limited
       .map((path) => {
         const relative = path.startsWith('/') ? path : `/${path}`;
         const loc = escapeXml(`${baseUrl}${relative}`);
@@ -793,6 +850,18 @@ export class NovelsService {
   }
 
   /* ------------------------------- 内部工具 ------------------------------- */
+
+  /** slug 唯一冲突（并发创建/改名）统一转 409：resolveSlug 的预检查覆盖不到竞态 */
+  private async guardSlugConflict<T>(action: () => Promise<T>): Promise<T> {
+    try {
+      return await action();
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('书籍 slug 已存在，请更换后重试');
+      }
+      throw error;
+    }
+  }
 
   private resolveBaseUrl(): string {
     const base = this.config.get<string>('PUBLIC_BASE_URL') ?? 'http://localhost:4000';

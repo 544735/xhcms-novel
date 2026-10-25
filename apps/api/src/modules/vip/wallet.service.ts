@@ -190,13 +190,15 @@ export class WalletService {
         throw new BadRequestException('订单已支付，请勿重复支付');
       }
 
-      const wallet =
-        (await tx.wallet.findUnique({ where: { memberId } })) ??
-        (await tx.wallet.create({ data: { memberId, balance: 0 } }));
-      const nextBalance = wallet.balance + order.coins;
+      // 原子自增：并发支付多笔订单时不能按旧余额覆写（丢币）
+      await tx.wallet.upsert({
+        where: { memberId },
+        create: { memberId, balance: 0 },
+        update: {},
+      });
       const updatedWallet = await tx.wallet.update({
         where: { memberId },
-        data: { balance: nextBalance },
+        data: { balance: { increment: order.coins } },
       });
       await tx.coinTransaction.create({
         data: {
@@ -245,29 +247,61 @@ export class WalletService {
       return { chapterId: chapter.id, unlocked: true, balance: wallet.balance, spent: 0 };
     }
 
-    const existingUnlock = await this.prisma.chapterUnlock.findUnique({
+    // 已购判断：章节 id 命中，或 (novelId, chapterNo) 快照命中
+    // ——章节被采集重导/删除重建（id 变化）后仍视为已购，不重复扣费
+    const exactUnlock = await this.prisma.chapterUnlock.findUnique({
       where: { memberId_chapterId: { memberId, chapterId: chapter.id } },
+      select: { id: true },
     });
-    if (existingUnlock) {
+    if (exactUnlock) {
+      return { chapterId: chapter.id, unlocked: true, balance: wallet.balance, spent: 0 };
+    }
+
+    const snapshotUnlock = await this.prisma.chapterUnlock.findFirst({
+      where: { memberId, novelId: chapter.novelId, chapterNo: chapter.chapterNo },
+      select: { id: true, chapterId: true },
+    });
+    if (snapshotUnlock) {
+      // 命中快照但指向旧章节：把记录重新指向当前章节（不新建、不重复扣费）
+      if (snapshotUnlock.chapterId !== chapter.id) {
+        try {
+          await this.prisma.chapterUnlock.update({
+            where: { id: snapshotUnlock.id },
+            data: { chapterId: chapter.id },
+          });
+        } catch (error) {
+          // 并发下另一个请求已把同一快照指向当前章节（P2002）：按已解锁处理即可
+          if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')) {
+            throw error;
+          }
+        }
+      }
       return { chapterId: chapter.id, unlocked: true, balance: wallet.balance, spent: 0 };
     }
 
     const price = Math.max(1, chapter.price || CHAPTER_DEFAULT_PRICE);
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const current =
-          (await tx.wallet.findUnique({ where: { memberId } })) ??
-          (await tx.wallet.create({ data: { memberId, balance: 0 } }));
-        if (current.balance < price) {
+        // 余额校验与扣减合并成一次条件更新：并发下不会把余额扣成负数
+        const deducted = await tx.wallet.updateMany({
+          where: { memberId, balance: { gte: price } },
+          data: { balance: { decrement: price } },
+        });
+        if (deducted.count === 0) {
           throw new BadRequestException('书币不足，请先充值');
         }
 
-        const updatedWallet = await tx.wallet.update({
-          where: { memberId },
-          data: { balance: { decrement: price } },
-        });
+        const updatedWallet = await tx.wallet.findUniqueOrThrow({ where: { memberId } });
         await tx.chapterUnlock.create({
-          data: { memberId, chapterId: chapter.id, coins: price },
+          data: {
+            memberId,
+            chapterId: chapter.id,
+            coins: price,
+            // 快照：章节日后被删除/重建时仍能识别为已购
+            novelId: chapter.novelId,
+            chapterNo: chapter.chapterNo,
+            title: chapter.title,
+          },
         });
         await tx.coinTransaction.create({
           data: {

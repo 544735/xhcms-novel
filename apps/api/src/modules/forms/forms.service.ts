@@ -1,4 +1,4 @@
-﻿import {
+import {
   BadRequestException,
   Injectable,
   NotFoundException,
@@ -14,6 +14,7 @@ import { normalizePage, paginate } from '../../common/dto/pagination.dto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuditService } from '../../common/audit/audit.service';
 import { clientIp } from '../../common/utils/request.util';
+import { sanitizeMultilineText, sanitizePlainText } from '../../common/utils/sanitize.util';
 import { ensureUniqueSlug, slugify } from '../../common/utils/slug.util';
 import type { AuthenticatedRequest } from '../../common/types';
 import { CreateFormDto } from './dto/create-form.dto';
@@ -27,6 +28,15 @@ const SELECT_TYPES = new Set<FormField['type']>(['select', 'radio']);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TEL_PATTERN = /^[0-9+\-()\s]{5,30}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 表单元信息清洗上限 */
+const FORM_NAME_MAX = 120;
+const FORM_DESCRIPTION_MAX = 500;
+const FORM_SUCCESS_MESSAGE_MAX = 300;
+/** 单个提交文本字段的清洗上限（与字段级 maxLength 校验互补） */
+const MAX_SUBMISSION_TEXT_LENGTH = 2000;
+/** 字段定义里的展示文本清洗上限（label / placeholder / options[]） */
+const FIELD_TEXT_MAX = 120;
 
 /** 出库容错 parse */
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -95,18 +105,24 @@ export class FormsService {
   }
 
   async create(siteId: string, dto: CreateFormDto, req?: AuthenticatedRequest): Promise<Form> {
+    const name = sanitizePlainText(dto.name, FORM_NAME_MAX);
+    if (!name) throw new BadRequestException('表单名称不能为空');
     const fields = this.validateFields(dto.fields);
-    const slug = await this.resolveSlug(siteId, dto.slug || slugify(dto.name), undefined);
+    const slug = await this.resolveSlug(siteId, dto.slug || slugify(name), undefined);
 
     const row = await this.prisma.form.create({
       data: {
         siteId,
-        name: dto.name.trim(),
+        name,
         slug,
-        description: dto.description ?? null,
+        description: dto.description
+          ? sanitizePlainText(dto.description, FORM_DESCRIPTION_MAX) || null
+          : null,
         fields: JSON.stringify(fields),
         status: dto.status ?? 'enabled',
-        successMessage: dto.successMessage ?? null,
+        successMessage: dto.successMessage
+          ? sanitizePlainText(dto.successMessage, FORM_SUCCESS_MESSAGE_MAX) || null
+          : null,
       },
       include: { _count: { select: { submissions: true } } },
     });
@@ -130,13 +146,26 @@ export class FormsService {
     if (!existing) throw new NotFoundException('表单不存在');
 
     const data: Prisma.FormUpdateInput = {};
-    if (dto.name !== undefined) data.name = dto.name.trim();
-    if (dto.description !== undefined) data.description = dto.description;
+    if (dto.name !== undefined) {
+      const name = sanitizePlainText(dto.name, FORM_NAME_MAX);
+      if (!name) throw new BadRequestException('表单名称不能为空');
+      data.name = name;
+    }
+    if (dto.description !== undefined) {
+      data.description = dto.description
+        ? sanitizePlainText(dto.description, FORM_DESCRIPTION_MAX) || null
+        : null;
+    }
     if (dto.status !== undefined) data.status = dto.status;
-    if (dto.successMessage !== undefined) data.successMessage = dto.successMessage;
+    if (dto.successMessage !== undefined) {
+      data.successMessage = dto.successMessage
+        ? sanitizePlainText(dto.successMessage, FORM_SUCCESS_MESSAGE_MAX) || null
+        : null;
+    }
     if (dto.fields !== undefined) data.fields = JSON.stringify(this.validateFields(dto.fields));
     if (dto.slug !== undefined && dto.slug !== existing.slug) {
-      data.slug = await this.resolveSlug(siteId, dto.slug || slugify(dto.name ?? existing.name), id);
+      const baseName = typeof data.name === 'string' ? data.name : existing.name;
+      data.slug = await this.resolveSlug(siteId, dto.slug || slugify(baseName), id);
     }
 
     const row = await this.prisma.form.update({
@@ -275,29 +304,55 @@ export class FormsService {
 
   /* ---------------------------- 内部工具 ---------------------------- */
 
-  /** 字段定义校验：key 唯一、类型合法、选项类字段必须有选项 */
+  /**
+   * 字段定义校验：key 唯一、类型合法、选项类字段必须有选项。
+   *
+   * 展示文本（label / placeholder / options[]）在入库前统一清洗：
+   * 这些值会直接进后台与门户渲染，属于可被匿名访客间接写入的文本。
+   * key / type / maxLength / required 等结构性字段**不清洗**（参与取值与校验）。
+   */
   private validateFields(fields: readonly FormField[]): FormField[] {
+    // 先清洗再做校验，避免 `<b></b>` 这类「看着有内容、清洗后为空」的选项混过必填判断
+    const normalized = fields.map((field) => {
+      const label = sanitizePlainText(field.label, FIELD_TEXT_MAX);
+      const placeholder = field.placeholder
+        ? sanitizePlainText(field.placeholder, FIELD_TEXT_MAX)
+        : '';
+      const options = field.options
+        ? Array.from(
+            new Set(
+              field.options
+                .map((option) => sanitizePlainText(option, FIELD_TEXT_MAX))
+                .filter((option) => option.length > 0),
+            ),
+          )
+        : undefined;
+      return { field, label, placeholder, options };
+    });
+
     const seen = new Set<string>();
-    for (const field of fields) {
+    for (const { field, label, options } of normalized) {
       if (seen.has(field.key)) {
         throw new BadRequestException(`表单字段 key「${field.key}」重复，请修改后再保存`);
       }
       seen.add(field.key);
 
       if (SELECT_TYPES.has(field.type) || field.type === 'checkbox') {
-        const options = (field.options ?? []).filter((option) => option && option.trim());
-        if (!options.length) {
-          throw new BadRequestException(`字段「${field.label}」为选项类型，请至少配置一个选项`);
+        if (!options?.length) {
+          throw new BadRequestException(
+            `字段「${label || field.key}」为选项类型，请至少配置一个选项`,
+          );
         }
       }
     }
-    return fields.map((field) => ({
+
+    return normalized.map(({ field, label, placeholder, options }) => ({
       key: field.key,
-      label: field.label,
+      label,
       type: field.type,
       ...(field.required === undefined ? {} : { required: Boolean(field.required) }),
-      ...(field.placeholder ? { placeholder: field.placeholder } : {}),
-      ...(field.options ? { options: field.options.filter((option) => option && option.trim()) } : {}),
+      ...(placeholder ? { placeholder } : {}),
+      ...(options ? { options } : {}),
       ...(field.maxLength ? { maxLength: field.maxLength } : {}),
     }));
   }
@@ -326,7 +381,14 @@ export class FormsService {
       if (isEmpty) continue;
 
       if (Array.isArray(raw)) {
-        const values = raw.map((item) => String(item ?? '').trim()).filter(Boolean);
+        // 每个字符串项都去 HTML（复选框值仍按清洗后的值匹配选项）
+        const values = raw
+          .map((item) =>
+            typeof item === 'string'
+              ? sanitizeMultilineText(item, MAX_SUBMISSION_TEXT_LENGTH)
+              : String(item ?? ''),
+          )
+          .filter(Boolean);
         if (!values.length) continue;
         if (field.type === 'checkbox' && field.options?.length) {
           const invalid = values.filter((value) => !field.options!.includes(value));
@@ -336,7 +398,17 @@ export class FormsService {
         continue;
       }
 
-      const value = typeof raw === 'string' ? raw.trim() : raw;
+      // 入库前清洗（保留换行）。后续类型校验与长度校验都基于清洗后的值，
+      // 避免 `<b>1</b>2…` 这类 HTML 填充绕过 maxLength。
+      const value =
+        typeof raw === 'string'
+          ? sanitizeMultilineText(raw.trim(), MAX_SUBMISSION_TEXT_LENGTH)
+          : raw;
+      // 清洗后可能变空（例如只提交了 `<div></div>`），此时必填语义仍需成立
+      if (field.required && typeof value === 'string' && !value) {
+        errors.push(`${field.label}不能为空`);
+        continue;
+      }
       cleaned[field.key] = value;
 
       switch (field.type) {

@@ -1,4 +1,5 @@
 ﻿import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -158,8 +159,16 @@ export class MembersService {
     if (dto.nickname !== undefined) data.nickname = dto.nickname;
     if (dto.avatar !== undefined) data.avatar = dto.avatar;
     if (dto.status !== undefined) data.status = dto.status;
+    // 由其它状态变为禁用时自增令牌版本，使该会员已签发的令牌立即失效
+    if (dto.status === 'disabled' && existing.status !== 'disabled') {
+      data.tokenVersion = { increment: 1 };
+    }
     if (dto.points !== undefined) data.points = dto.points;
-    if (dto.password) data.password = hashSync(dto.password, PASSWORD_ROUNDS);
+    if (dto.password) {
+      data.password = hashSync(dto.password, PASSWORD_ROUNDS);
+      // 管理员重置密码后自增令牌版本，使该会员已签发的令牌立即失效
+      data.tokenVersion = { increment: 1 };
+    }
 
     const row = await this.prisma.member.update({
       where: { id },
@@ -180,6 +189,15 @@ export class MembersService {
   async remove(siteId: string, id: string, req?: AuthenticatedRequest): Promise<null> {
     const existing = await this.prisma.member.findFirst({ where: { id, siteId } });
     if (!existing) throw new NotFoundException('会员不存在');
+
+    // 有订单或书币流水的会员不可删除：外键为 Restrict，直接删会抛 P2003 变成 500
+    const [orderCount, transactionCount] = await Promise.all([
+      this.prisma.order.count({ where: { memberId: id } }),
+      this.prisma.coinTransaction.count({ where: { memberId: id } }),
+    ]);
+    if (orderCount > 0 || transactionCount > 0) {
+      throw new BadRequestException('该会员存在订单或书币流水，无法删除；请改为「禁用」');
+    }
 
     await this.prisma.member.delete({ where: { id } });
     await this.audit.log(req, {
@@ -202,7 +220,8 @@ export class MembersService {
 
     const row = await this.prisma.member.update({
       where: { id },
-      data: { status },
+      // 禁用时自增令牌版本，使该会员已签发的令牌立即失效
+      data: status === 'disabled' ? { status, tokenVersion: { increment: 1 } } : { status },
       include: { _count: { select: { comments: true } } },
     });
     await this.audit.log(req, {
@@ -223,9 +242,10 @@ export class MembersService {
     const existing = await this.prisma.member.findFirst({ where: { id, siteId } });
     if (!existing) throw new NotFoundException('会员不存在');
 
+    // 重置密码后自增令牌版本，使该会员已签发的令牌立即失效
     await this.prisma.member.update({
       where: { id },
-      data: { password: hashSync(password, PASSWORD_ROUNDS) },
+      data: { password: hashSync(password, PASSWORD_ROUNDS), tokenVersion: { increment: 1 } },
     });
     await this.audit.log(req, {
       action: 'member.reset_password',
@@ -314,7 +334,11 @@ export class MembersService {
     const data: Prisma.MemberUpdateInput = {};
     if (dto.nickname !== undefined) data.nickname = dto.nickname;
     if (dto.avatar !== undefined) data.avatar = dto.avatar;
-    if (dto.password) data.password = hashSync(dto.password, PASSWORD_ROUNDS);
+    if (dto.password) {
+      data.password = hashSync(dto.password, PASSWORD_ROUNDS);
+      // 会员自助改密后自增令牌版本，使其它设备/会话上的旧令牌失效
+      data.tokenVersion = { increment: 1 };
+    }
 
     const row = await this.prisma.member.update({ where: { id: memberId }, data });
     return toPublicMember(row);
@@ -367,6 +391,8 @@ export class MembersService {
       type: 'member',
       siteId: member.siteId,
       username: member.username,
+      // 令牌版本：守卫每请求与库中 tokenVersion 比对，改密/禁用后旧令牌失效
+      ver: member.tokenVersion,
     };
     return this.jwt.signAsync(payload, {
       secret: this.secrets.member,

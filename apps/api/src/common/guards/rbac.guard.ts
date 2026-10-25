@@ -40,6 +40,13 @@ export class RbacGuard implements CanActivate {
     if (ctx.status !== 'active') {
       throw new ForbiddenException('账号已被禁用，请联系管理员');
     }
+    // 令牌版本校验：改密/登出/禁用后自增，旧令牌立即失效（未携带 ver 的旧令牌放行至过期）
+    if (
+      req.user.tokenVersion !== undefined &&
+      req.user.tokenVersion !== ctx.tokenVersion
+    ) {
+      throw new UnauthorizedException('登录状态已失效，请重新登录');
+    }
     req.authContext = ctx;
 
     if (ctx.isSuperAdmin) return true;

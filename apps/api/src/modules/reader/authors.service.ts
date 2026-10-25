@@ -15,7 +15,6 @@ import type {
   PageQuery,
   Paginated,
 } from '@wmcms/shared';
-import { CHAPTER_DEFAULT_PRICE } from '@wmcms/shared';
 import { AuditService } from '../../common/audit/audit.service';
 import { normalizePage, paginate } from '../../common/dto/pagination.dto';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -23,6 +22,7 @@ import { PluginHostService } from '../../common/plugins/plugin-host.service';
 import { sanitizePlainText } from '../../common/utils/sanitize.util';
 import { ensureUniqueSlug, slugify } from '../../common/utils/slug.util';
 import type { AuthenticatedRequest } from '../../common/types';
+import { createChapterWithRetry, normalizeChapterPrice } from '../novels/novel.util';
 import type {
   ApplyAuthorDto,
   CreateAuthorChapterDto,
@@ -435,34 +435,31 @@ export class AuthorsService {
     if (!content) throw new BadRequestException('章节正文不能为空');
 
     const volumeId = await this.resolveVolume(novelId, dto.volumeId ?? null);
-    const maxRow = await this.prisma.chapter.aggregate({
-      where: { novelId },
-      _max: { chapterNo: true },
-    });
-    const chapterNo = (maxRow._max.chapterNo ?? 0) + 1;
 
     const isVip = Boolean(dto.isVip);
-    const price = isVip
-      ? Math.max(1, Math.trunc(dto.price ?? CHAPTER_DEFAULT_PRICE))
-      : 0;
+    // 统一口径：isVip => price>=1（未填回落默认价），非 VIP => price=0
+    const price = normalizeChapterPrice(isVip, dto.price);
     // 书籍未上架（pending/rejected/offline）时章节只能存为草稿
     const published = novel.auditStatus === 'published' && dto.status !== 'draft';
     const status = published ? 'published' : 'draft';
 
-    const row = await this.prisma.chapter.create({
-      data: {
-        novelId,
-        volumeId,
-        chapterNo,
-        title,
-        content,
-        wordCount: countChapterWords(content),
-        isVip,
-        price,
-        status,
-        publishedAt: published ? new Date() : null,
-      },
-    });
+    // 并发创建时由 (novelId, chapterNo) 唯一约束兜底，冲突自动重算序号重试
+    const row = await createChapterWithRetry(this.prisma, novelId, (chapterNo) =>
+      this.prisma.chapter.create({
+        data: {
+          novelId,
+          volumeId,
+          chapterNo,
+          title,
+          content,
+          wordCount: countChapterWords(content),
+          isVip,
+          price,
+          status,
+          publishedAt: published ? new Date() : null,
+        },
+      }),
+    );
 
     await recomputeNovelStats(this.prisma, novelId);
     if (published) {
@@ -489,7 +486,7 @@ export class AuthorsService {
 
     const existing = await this.prisma.chapter.findFirst({
       where: { id: chapterId, novelId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, isVip: true, price: true },
     });
     if (!existing) throw new NotFoundException('章节不存在或无权操作');
 
@@ -508,14 +505,14 @@ export class AuthorsService {
     if (dto.volumeId !== undefined) {
       data.volumeId = await this.resolveVolume(novelId, dto.volumeId ?? null);
     }
-    if (dto.isVip !== undefined) {
-      data.isVip = dto.isVip;
-      data.price = dto.isVip
-        ? Math.max(1, Math.trunc(dto.price ?? CHAPTER_DEFAULT_PRICE))
-        : 0;
-    } else if (dto.price !== undefined) {
-      // 单独调整价格：免费章节保持 0 以外仍允许管理员/作者后续改价
-      data.price = Math.max(0, Math.trunc(dto.price));
+    if (dto.isVip !== undefined || dto.price !== undefined) {
+      const isVip = dto.isVip ?? existing.isVip;
+      // 复用统一定价口径：避免只传 price 时留下「VIP 但 0 币」的免费章节
+      data.isVip = isVip;
+      data.price = normalizeChapterPrice(
+        isVip,
+        dto.price !== undefined ? dto.price : existing.price,
+      );
     }
 
     if (dto.status !== undefined) {

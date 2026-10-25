@@ -2,9 +2,37 @@
 
 import { AlertTriangle, RotateCcw } from 'lucide-react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
 
-/** 门户错误边界：渲染异常 / 数据异常时兜底，避免白屏 */
+/** 门户一级路由段（与 app/(portal)/ 下的真实目录一致）；首段命中它们说明是默认入口 */
+const PORTAL_ROUTE_SEGMENTS = new Set([
+  'read',
+  'book',
+  'books',
+  'category',
+  'rank',
+  'search',
+  'shelf',
+  'history',
+  'vip',
+  'member',
+  'author',
+  'author-center',
+]);
+
+/** 由当前路径推导站点前缀：'/ink/book/x' → '/ink'，'/book/x' → ''（默认入口） */
+function portalBasePathFromPathname(pathname: string): string {
+  const [first, second] = pathname.split('/').filter(Boolean);
+  if (!first || PORTAL_ROUTE_SEGMENTS.has(first)) return '';
+  if (!second || PORTAL_ROUTE_SEGMENTS.has(second)) return `/${first}`;
+  return '';
+}
+
+/**
+ * 门户错误边界：渲染异常 / 数据异常时兜底，避免白屏。
+ * 「返回首页」保留站点前缀（与 not-found.tsx 同一套推导，避免 /ink 下跳回默认站点）。
+ */
 export default function PortalError({
   error,
   reset,
@@ -12,6 +40,9 @@ export default function PortalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const pathname = usePathname() ?? '';
+  const basePath = portalBasePathFromPathname(pathname);
+
   useEffect(() => {
     console.error('[XHCMS][portal] 页面渲染错误：', error);
   }, [error]);
@@ -40,7 +71,7 @@ export default function PortalError({
           重试
         </button>
         <Link
-          href="/"
+          href={basePath || '/'}
           className="inline-flex h-9 items-center rounded-lg border border-border bg-card px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted"
         >
           返回首页

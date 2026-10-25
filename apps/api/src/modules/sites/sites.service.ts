@@ -142,7 +142,9 @@ export class SitesService {
     return rows.map(toSiteSummary);
   }
 
-  async findOne(id: string): Promise<Site> {
+  /** 站点详情（非超管仅可查看自己被授权的站点） */
+  async findOne(id: string, current: AuthContext): Promise<Site> {
+    assertSiteAccess(current, id);
     const site = await this.prisma.site.findUnique({ where: { id } });
     if (!site) throw new NotFoundException('站点不存在');
     return toSiteDto(site);
@@ -155,13 +157,38 @@ export class SitesService {
     return site;
   }
 
-  /** 门户站点解析：仅启用中的站点可见 */
+  /**
+   * 门户站点解析：仅启用中的站点可见，并合并后台「站点设置」(Setting 表) 到 site.settings，
+   * 使管理端保存的站点设置对门户公开接口生效（仅影响公共读取路径，管理端接口不变）。
+   */
   async resolvePublicSite(slug: string): Promise<PrismaSite> {
     const site = await this.prisma.site.findUnique({ where: { slug } });
     if (!site || site.status !== 'enabled') {
       throw new NotFoundException('站点不存在或已关闭');
     }
-    return site;
+    return { ...site, settings: await this.mergePublicSettings(site) };
+  }
+
+  /**
+   * 把 Setting 表中该站点的键值并入 site.settings（同名键以 Setting 表为准）。
+   * 容错：原 settings 非法 JSON 时按空对象处理；Setting 值为字符串/Null，保持原样。
+   * 说明：不合并 siteId=null 的全局设置 —— 公共接口会把 settings 直接返回给匿名访客，
+   * 全局设置可能含平台级密钥（SMTP / 支付等），若确需公开应改为键白名单。
+   */
+  private async mergePublicSettings(site: PrismaSite): Promise<string | null> {
+    const rows = await this.prisma.setting.findMany({
+      where: { siteId: site.id },
+      orderBy: [{ group: 'asc' }, { key: 'asc' }],
+      select: { key: true, value: true },
+    });
+    if (!rows.length) return site.settings;
+
+    const merged: Record<string, unknown> = { ...(parseSiteSettings(site.settings) ?? {}) };
+    for (const row of rows) {
+      if (!row.key) continue;
+      merged[row.key] = row.value;
+    }
+    return JSON.stringify(merged);
   }
 
   async create(dto: CreateSiteDto, req: AuthenticatedRequest): Promise<Site> {
@@ -200,9 +227,16 @@ export class SitesService {
     return toSiteDto(site);
   }
 
-  async update(id: string, dto: UpdateSiteDto, req: AuthenticatedRequest): Promise<Site> {
-    const current = await this.prisma.site.findUnique({ where: { id } });
-    if (!current) throw new NotFoundException('站点不存在');
+  async update(
+    id: string,
+    dto: UpdateSiteDto,
+    req: AuthenticatedRequest,
+    current: AuthContext,
+  ): Promise<Site> {
+    // 先做站点级鉴权，避免非超管越权修改其他站点
+    assertSiteAccess(current, id);
+    const existing = await this.prisma.site.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('站点不存在');
 
     const data: Prisma.SiteUpdateInput = {};
 
@@ -210,7 +244,7 @@ export class SitesService {
 
     if (dto.slug !== undefined) {
       const slug = dto.slug.trim().toLowerCase();
-      if (slug !== current.slug) {
+      if (slug !== existing.slug) {
         const exists = await this.prisma.site.findUnique({ where: { slug } });
         if (exists) throw new ConflictException('站点标识已存在，请更换');
         data.slug = slug;
@@ -219,7 +253,7 @@ export class SitesService {
 
     if (dto.domain !== undefined) {
       const domain = optionalText(dto.domain);
-      if (domain && domain !== current.domain) {
+      if (domain && domain !== existing.domain) {
         const exists = await this.prisma.site.findUnique({ where: { domain } });
         if (exists) throw new ConflictException('域名已被其他站点占用');
       }
@@ -245,13 +279,42 @@ export class SitesService {
     return toSiteDto(site);
   }
 
-  async remove(id: string, req: AuthenticatedRequest): Promise<null> {
+  async remove(id: string, req: AuthenticatedRequest, current: AuthContext): Promise<null> {
+    // 先做站点级鉴权，避免非超管越权删除其他站点
+    assertSiteAccess(current, id);
     const site = await this.prisma.site.findUnique({ where: { id } });
     if (!site) throw new NotFoundException('站点不存在');
 
-    const articleCount = await this.prisma.article.count({ where: { siteId: id } });
-    if (articleCount > 0) {
-      throw new BadRequestException('该站点下存在文章，无法删除');
+    // 删除前汇总检查站点下的业务数据：任一非空即拒绝，避免级联删除丢失内容
+    const [
+      articleCount,
+      novelCount,
+      memberCount,
+      commentCount,
+      formCount,
+      mediaCount,
+      collectTaskCount,
+    ] = await Promise.all([
+      this.prisma.article.count({ where: { siteId: id } }),
+      this.prisma.novel.count({ where: { siteId: id } }),
+      this.prisma.member.count({ where: { siteId: id } }),
+      this.prisma.comment.count({ where: { siteId: id } }),
+      this.prisma.form.count({ where: { siteId: id } }),
+      this.prisma.media.count({ where: { siteId: id } }),
+      this.prisma.collectTask.count({ where: { siteId: id } }),
+    ]);
+    if (
+      articleCount > 0 ||
+      novelCount > 0 ||
+      memberCount > 0 ||
+      commentCount > 0 ||
+      formCount > 0 ||
+      mediaCount > 0 ||
+      collectTaskCount > 0
+    ) {
+      throw new BadRequestException(
+        '站点下仍有内容或会员数据（文章/小说/会员/评论/表单/媒体/采集任务），请先清理或迁移后再删除',
+      );
     }
 
     await this.prisma.site.delete({ where: { id } });

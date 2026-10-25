@@ -5,7 +5,7 @@ import type { Media } from '@wmcms/shared';
 import type { Media as PrismaMedia } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { AuditService } from '../../common/audit/audit.service';
 import { normalizePage, paginate } from '../../common/dto/pagination.dto';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -17,13 +17,36 @@ import type { BatchDeleteMediaDto } from './dto/batch-delete-media.dto';
 import type { QueryMediaDto } from './dto/query-media.dto';
 import type { UploadMediaDto } from './dto/upload-media.dto';
 
+/**
+ * 存储扩展名只能由服务端 MIME 决定，绝不能采信客户端文件名
+ * （否则 `a.html` + `Content-Type: image/png` 可在 /uploads 下落出同源 HTML）。
+ */
 const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
   'image/gif': 'gif',
-  'image/svg+xml': 'svg',
   'application/pdf': 'pdf',
+};
+
+/** 允许上传的自定义文件夹名（防止 `..` 穿越到其它站点目录） */
+const FOLDER_PATTERN = /^[A-Za-z0-9_-]{1,40}$/;
+
+/** magic bytes 校验：声明的 MIME 必须与真实文件头一致 */
+const MAGIC_SIGNATURES: Record<string, (buf: Buffer) => boolean> = {
+  'image/jpeg': (buf) =>
+    buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff,
+  'image/png': (buf) => buf.length >= 4 && buf.subarray(0, 4).toString('hex') === '89504e47',
+  'image/gif': (buf) => {
+    if (buf.length < 6) return false;
+    const header = buf.subarray(0, 6).toString('ascii');
+    return header === 'GIF87a' || header === 'GIF89a';
+  },
+  'image/webp': (buf) =>
+    buf.length >= 12 &&
+    buf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buf.subarray(8, 12).toString('ascii') === 'WEBP',
+  'application/pdf': (buf) => buf.length >= 5 && buf.subarray(0, 5).toString('ascii') === '%PDF-',
 };
 
 function toMediaDto(row: PrismaMedia): Media {
@@ -112,14 +135,26 @@ export class MediaService {
       throw new BadRequestException('文件大小不能超过 10MB');
     }
 
+    // 声明的 MIME 必须与真实文件头一致，避免伪造 Content-Type 绕过白名单
+    const matchesMagic = MAGIC_SIGNATURES[file.mimetype];
+    if (matchesMagic && !matchesMagic(file.buffer)) {
+      throw new BadRequestException('文件内容与声明类型不符');
+    }
+
+    // originalName 只用于展示，不参与扩展名与存储路径
     const originalName = sanitizePlainText(file.originalname, 200) || 'file';
-    const ext = this.resolveExtension(originalName, file.mimetype);
+    const ext = this.resolveExtension(file.mimetype);
     const filename = `${randomUUID()}.${ext}`;
-    const folder = dto.folder?.trim() ? sanitizePlainText(dto.folder.trim(), 80) : formatYearMonth();
+
+    const requestedFolder = dto.folder?.trim();
+    if (requestedFolder && !FOLDER_PATTERN.test(requestedFolder)) {
+      throw new BadRequestException('文件夹名只能包含字母、数字、下划线或连字符');
+    }
+    const folder = requestedFolder || formatYearMonth();
 
     const relativePath = `${dto.siteId}/${folder}/${filename}`;
     const absolutePath = resolve(this.uploadRoot, relativePath);
-    if (!absolutePath.startsWith(this.uploadRoot)) {
+    if (!this.isInsideUploadRoot(absolutePath)) {
       throw new BadRequestException('非法的文件路径');
     }
 
@@ -129,20 +164,27 @@ export class MediaService {
     const isImage = file.mimetype.startsWith('image/');
     const dimensions = isImage ? readImageDimensions(file.buffer) : null;
 
-    const row = await this.prisma.media.create({
-      data: {
-        siteId: dto.siteId,
-        filename,
-        originalName,
-        mimeType: file.mimetype,
-        size: file.size,
-        width: dimensions?.width ?? null,
-        height: dimensions?.height ?? null,
-        url: `/uploads/${relativePath}`,
-        folder,
-        uploadedById: auth.id,
-      },
-    });
+    let row: PrismaMedia;
+    try {
+      row = await this.prisma.media.create({
+        data: {
+          siteId: dto.siteId,
+          filename,
+          originalName,
+          mimeType: file.mimetype,
+          size: file.size,
+          width: dimensions?.width ?? null,
+          height: dimensions?.height ?? null,
+          url: `/uploads/${relativePath}`,
+          folder,
+          uploadedById: auth.id,
+        },
+      });
+    } catch (error) {
+      // DB 写入失败时回收已落盘的文件，否则会留下批量删除也清不到的孤儿文件
+      await unlink(absolutePath).catch(() => undefined);
+      throw error;
+    }
 
     await this.audit.log(req, {
       action: 'media.upload',
@@ -195,10 +237,10 @@ export class MediaService {
 
   /** 删除磁盘文件（不存在时忽略） */
   private async removeFile(url: string): Promise<void> {
-    const relative = url.replace(/^\/?uploads\//, '');
-    if (!relative) return;
-    const absolutePath = resolve(this.uploadRoot, relative);
-    if (!absolutePath.startsWith(this.uploadRoot)) return;
+    const relativeUrl = url.replace(/^\/?uploads\//, '');
+    if (!relativeUrl) return;
+    const absolutePath = resolve(this.uploadRoot, relativeUrl);
+    if (!this.isInsideUploadRoot(absolutePath)) return;
     try {
       await unlink(absolutePath);
     } catch {
@@ -206,9 +248,18 @@ export class MediaService {
     }
   }
 
-  private resolveExtension(originalName: string, mimeType: string): string {
-    const matched = /\.([a-z0-9]{1,8})$/i.exec(originalName);
-    if (matched?.[1]) return matched[1].toLowerCase();
+  /**
+   * 绝对路径是否位于上传根目录内。
+   * 用 relative 语义判断，避免 `startsWith('/app/uploads')` 被 `/app/uploads-evil` 绕过，
+   * 也避免 `folder=../other-site` 之类穿越。
+   */
+  private isInsideUploadRoot(absolutePath: string): boolean {
+    const rel = relative(this.uploadRoot, absolutePath);
+    return Boolean(rel) && !rel.startsWith('..') && !isAbsolute(rel);
+  }
+
+  /** 扩展名只由服务端 MIME 决定（见 EXT_BY_MIME），不采信客户端文件名 */
+  private resolveExtension(mimeType: string): string {
     return EXT_BY_MIME[mimeType] ?? 'bin';
   }
 }

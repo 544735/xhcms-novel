@@ -27,7 +27,7 @@ interface SettingsFormState {
   primaryColor: string;
   keywords: string;
   commentAudit: boolean;
-  postsPerPage: string;
+  pageSize: string;
   heroTitle: string;
   heroSubtitle: string;
 }
@@ -45,7 +45,7 @@ function buildForm(data?: SettingsMap): SettingsFormState {
     primaryColor: readSetting(data, 'general', 'primaryColor'),
     keywords: readSetting(data, 'seo', 'keywords'),
     commentAudit: readSetting(data, 'comment', 'commentAudit') !== 'false',
-    postsPerPage: readSetting(data, 'home', 'postsPerPage') || '10',
+    pageSize: readSetting(data, 'home', 'pageSize') || '10',
     heroTitle: readSetting(data, 'home', 'heroTitle'),
     heroSubtitle: readSetting(data, 'home', 'heroSubtitle'),
   };
@@ -89,8 +89,8 @@ function SettingsContent() {
   });
 
   const handleSave = () => {
-    const postsPerPage = Number(form.postsPerPage);
-    if (!Number.isInteger(postsPerPage) || postsPerPage < 1 || postsPerPage > 100) {
+    const pageSize = Number(form.pageSize);
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
       toast.error('每页条数需为 1-100 之间的整数');
       setTab('home');
       return;
@@ -103,7 +103,7 @@ function SettingsContent() {
       { key: 'primaryColor', value: form.primaryColor.trim(), group: 'general' },
       { key: 'keywords', value: form.keywords.trim(), group: 'seo' },
       { key: 'commentAudit', value: form.commentAudit ? 'true' : 'false', group: 'comment' },
-      { key: 'postsPerPage', value: String(postsPerPage), group: 'home' },
+      { key: 'pageSize', value: String(pageSize), group: 'home' },
       { key: 'heroTitle', value: form.heroTitle.trim(), group: 'home' },
       { key: 'heroSubtitle', value: form.heroSubtitle.trim(), group: 'home' },
     ];
@@ -302,8 +302,8 @@ function SettingsContent() {
                         type="number"
                         min={1}
                         max={100}
-                        value={form.postsPerPage}
-                        onChange={(event) => update('postsPerPage', event.target.value)}
+                        value={form.pageSize}
+                        onChange={(event) => update('pageSize', event.target.value)}
                         disabled={!canUpdate || saveMutation.isPending}
                       />
                     </Field>

@@ -12,8 +12,10 @@
     "db:seed": "prisma db seed",
     "db:reset": "prisma db push --force-reset --skip-generate && prisma generate && prisma db seed",
     "db:studio": "prisma studio",
+    "db:backfill-unlocks": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/backfill-unlock-snapshots.ts",
     "test": "jest --config test/jest-e2e.json --runInBand",
-    "test:e2e": "jest --config test/jest-e2e.json --runInBand"
+    "test:e2e": "jest --config test/jest-e2e.json --runInBand",
+    "test:unit": "jest --config test/jest-unit.json --runInBand"
   },
   "prisma": {
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"

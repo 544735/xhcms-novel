@@ -23,8 +23,12 @@ cmd /c "pnpm dev:web"                     # 启动 Web: http://localhost:3000
 - 运行期端口：API `4000`，Web `3000`。
 - 数据库文件：`apps/api/prisma/dev.db`。
 - Swagger：`http://localhost:4000/api/docs`。
-- 演示账号（seed 生成）：`admin / Admin@123456`（超管）、`editor / Editor@123456`（内容编辑）、
-  `operator / Operator@123456`（运营）；门户会员 `alice / Member@123456`、作者 `xinghe / Member@123456`。
+- 演示账号（seed 生成，**仅限本地开发/演示**）：`admin`（默认口令 `Admin@123456`，超管）、`editor`
+  （`Editor@123456`，内容编辑）、`operator`（`Operator@123456`，运营）；门户会员 `alice`、作者 `xinghe`
+  （`Member@123456`）。
+- 生产环境（`NODE_ENV=production`）首次 seed 未提供 `SEED_*_PASSWORD` 时，上述口令会**随机生成**并写入
+  `apps/api/.seed-credentials.txt`（可用 `SEED_CREDENTIALS_FILE` 覆盖路径，容器内建议指向 `/data` 卷），
+  日志不打印口令；首个登录后请立即改密并删除该文件。上面列出的固定口令仅限本地开发/演示。
 - 演示站点：`books`（星海书城，modern 主题）、`ink`（墨香书屋，magazine 主题）。
 - 小说接口契约见 `docs/NOVEL_API.md`（旧 CMS 文章契约 `docs/API_CONTRACT.md` 仅历史参考）。
 

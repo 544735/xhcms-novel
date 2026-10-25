@@ -34,6 +34,7 @@ import {
 import {
   compileChapterPattern,
   countChapterWords,
+  createChapterWithRetry,
   estimateReadingTime,
   normalizeChapterPrice,
   splitTxtChapters,
@@ -149,22 +150,24 @@ export class ChaptersService {
     const content = toPlainChapterContent(dto.content);
     const isVip = dto.isVip ?? false;
     const status: ChapterStatus = dto.status ?? 'published';
-    const chapterNo = await this.nextChapterNo(novel.id);
 
-    const row = await this.prisma.chapter.create({
-      data: {
-        novelId: novel.id,
-        volumeId,
-        chapterNo,
-        title: sanitizePlainText(dto.title, 200) || '未命名章节',
-        content,
-        wordCount: countChapterWords(content),
-        isVip,
-        price: normalizeChapterPrice(isVip, dto.price),
-        status,
-        publishedAt: status === 'published' ? new Date() : null,
-      },
-    });
+    // 并发创建时由 (novelId, chapterNo) 唯一约束兜底，冲突自动重算序号重试
+    const row = await createChapterWithRetry(this.prisma, novel.id, (chapterNo) =>
+      this.prisma.chapter.create({
+        data: {
+          novelId: novel.id,
+          volumeId,
+          chapterNo,
+          title: sanitizePlainText(dto.title, 200) || '未命名章节',
+          content,
+          wordCount: countChapterWords(content),
+          isVip,
+          price: normalizeChapterPrice(isVip, dto.price),
+          status,
+          publishedAt: status === 'published' ? new Date() : null,
+        },
+      }),
+    );
 
     await this.recalculateNovel(novel.id);
     await this.audit.log(req, {
@@ -331,50 +334,61 @@ export class ChaptersService {
       throw new BadRequestException('未从 TXT 中解析出章节内容，请检查分章正则');
     }
 
-    let volumeId: string | null = null;
     const volumeTitle = dto.volumeTitle?.trim();
-    if (volumeTitle) {
-      const lastVolume = await this.prisma.volume.findFirst({
-        where: { novelId: novel.id },
-        orderBy: { sort: 'desc' },
-        select: { sort: true },
-      });
-      const volume = await this.prisma.volume.create({
-        data: {
+
+    // 建分卷 + 批量插入在同一事务内；序号冲突时事务整体回滚重试，不留空分卷
+    const created = await createChapterWithRetry(this.prisma, novel.id, (startNo) =>
+      this.prisma.$transaction(async (tx) => {
+        let volumeId: string | null = null;
+        if (volumeTitle) {
+          const lastVolume = await tx.volume.findFirst({
+            where: { novelId: novel.id },
+            orderBy: { sort: 'desc' },
+            select: { sort: true },
+          });
+          const volume = await tx.volume.create({
+            data: {
+              novelId: novel.id,
+              title: sanitizePlainText(volumeTitle, 100) || '正文',
+              sort: (lastVolume?.sort ?? -1) + 1,
+            },
+          });
+          volumeId = volume.id;
+        }
+
+        const now = new Date();
+        const data = parsed.map((item, index) => ({
           novelId: novel.id,
-          title: sanitizePlainText(volumeTitle, 100) || '正文',
-          sort: (lastVolume?.sort ?? -1) + 1,
-        },
-      });
-      volumeId = volume.id;
-    }
+          volumeId,
+          chapterNo: startNo + index,
+          title: item.title,
+          content: item.content,
+          wordCount: countChapterWords(item.content),
+          isVip: false,
+          price: 0,
+          status: 'published',
+          publishedAt: now,
+        }));
 
-    const startNo = await this.nextChapterNo(novel.id);
-    const now = new Date();
-    const data = parsed.map((item, index) => ({
-      novelId: novel.id,
-      volumeId,
-      chapterNo: startNo + index,
-      title: item.title,
-      content: item.content,
-      wordCount: countChapterWords(item.content),
-      isVip: false,
-      price: 0,
-      status: 'published',
-      publishedAt: now,
-    }));
+        await tx.chapter.createMany({ data });
+        const words = data.reduce((sum, item) => sum + item.wordCount, 0);
+        return { count: data.length, words, volumeId };
+      }),
+    );
 
-    await this.prisma.chapter.createMany({ data });
     await this.recalculateNovel(novel.id);
-
-    const words = data.reduce((sum, item) => sum + item.wordCount, 0);
     await this.audit.log(req, {
       action: 'chapter.import',
       resource: 'chapter',
       resourceId: novel.id,
-      detail: { novelId: novel.id, chapters: data.length, words, volumeId },
+      detail: {
+        novelId: novel.id,
+        chapters: created.count,
+        words: created.words,
+        volumeId: created.volumeId,
+      },
     });
-    return { novelId: novel.id, chapters: data.length, words };
+    return { novelId: novel.id, chapters: created.count, words: created.words };
   }
 
   /* -------------------------------- 门户 -------------------------------- */
@@ -424,8 +438,13 @@ export class ChaptersService {
       if (novel.authorId && novel.authorId === memberId) {
         unlocked = true;
       } else {
-        const record = await this.prisma.chapterUnlock.findUnique({
-          where: { memberId_chapterId: { memberId, chapterId: chapter.id } },
+        // 与 WalletService.unlockChapter 同一语义：章节 id 命中，或 (novelId, chapterNo) 快照命中
+        // （采集重导导致章节 id 变化后，已购读者仍视为已解锁，不会重复扣费）
+        const record = await this.prisma.chapterUnlock.findFirst({
+          where: {
+            memberId,
+            OR: [{ chapterId: chapter.id }, { novelId: novel.id, chapterNo: chapter.chapterNo }],
+          },
           select: { id: true },
         });
         unlocked = record !== null;
@@ -551,15 +570,6 @@ export class ChaptersService {
       where: { id: novelId },
       data: { words, chapterCount: rows.length, lastChapterAt },
     });
-  }
-
-  private async nextChapterNo(novelId: string): Promise<number> {
-    const last = await this.prisma.chapter.findFirst({
-      where: { novelId },
-      orderBy: { chapterNo: 'desc' },
-      select: { chapterNo: true },
-    });
-    return (last?.chapterNo ?? 0) + 1;
   }
 
   private async findNovelOrThrow(novelId: string, siteId: string): Promise<NovelBrief> {

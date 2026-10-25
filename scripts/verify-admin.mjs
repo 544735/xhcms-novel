@@ -55,7 +55,11 @@ async function findTarget() {
 }
 
 async function main() {
-  const login = await apiLogin('admin', 'Admin@123456');
+  const adminPassword = process.env.ADMIN_PASSWORD || process.env.SEED_ADMIN_PASSWORD || 'Admin@123456';
+  if (!process.env.ADMIN_PASSWORD && !process.env.SEED_ADMIN_PASSWORD) {
+    console.warn('使用开发默认口令；生产请用 ADMIN_PASSWORD/SEED_ADMIN_PASSWORD 覆盖');
+  }
+  const login = await apiLogin('admin', adminPassword);
   console.log(`登录成功：${login.user.username}，权限 ${login.user.permissions.length} 项`);
 
   const target = await findTarget();

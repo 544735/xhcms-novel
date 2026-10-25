@@ -293,7 +293,7 @@ Write-Host "  管理后台:  $PublicUrl/admin"
 Write-Host "  API:       http://localhost:$ApiPort/api/v1"
 Write-Host "  API 文档:  http://localhost:$ApiPort/api/docs"
 Write-Host ''
-Write-Host '  演示账号:  admin / Admin@123456（首次部署建议加 -Seed）'
+Write-Host '  管理员账号:  admin（口令见 apps/api/.seed-credentials.txt 或 SEED_ADMIN_PASSWORD）'
 Write-Host "  服务日志:  logs\api.log  /  logs\web.log"
 Write-Host "  部署日志:  $deployLog"
 Write-Host '  停止服务:  powershell -ExecutionPolicy Bypass -File deploy\stop-windows.ps1'

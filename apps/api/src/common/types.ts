@@ -4,6 +4,8 @@ export interface JwtPayload {
   sub: string;
   username: string;
   type: 'access' | 'refresh';
+  /** 令牌版本：与 user.tokenVersion 不一致即视为失效 */
+  ver?: number;
   iat?: number;
   exp?: number;
 }
@@ -13,6 +15,8 @@ export interface MemberJwtPayload {
   type: 'member';
   siteId: string;
   username: string;
+  /** 令牌版本：与 member.tokenVersion 不一致即视为失效 */
+  ver?: number;
   iat?: number;
   exp?: number;
 }
@@ -24,6 +28,8 @@ export interface AuthContext {
   nickname: string | null;
   isSuperAdmin: boolean;
   status: string;
+  /** 令牌版本：改密/登出/禁用时自增，用于判定旧令牌失效 */
+  tokenVersion: number;
   permissionCodes: Set<string>;
   siteIds: Set<string>;
 }
@@ -35,7 +41,7 @@ export interface AuthMember {
 }
 
 export interface AuthenticatedRequest extends Request {
-  user?: { id: string; username: string; type: 'access' | 'refresh' };
+  user?: { id: string; username: string; type: 'access' | 'refresh'; tokenVersion?: number };
   authContext?: AuthContext;
   siteId?: string;
   member?: AuthMember;

@@ -19,8 +19,16 @@ echo "[entrypoint] 同步数据库结构：$DATABASE_URL"
 pnpm --filter @wmcms/api exec prisma db push --schema prisma/schema.prisma --skip-generate
 
 if [ "${SEED_DEMO:-0}" = "1" ]; then
-  echo "[entrypoint] 写入演示数据（SEED_DEMO=1）"
-  pnpm --filter @wmcms/api db:seed
+  # db:seed 是破坏性操作（先清空全部表），因此只允许在数据卷上首次执行一次。
+  SEED_MARKER="$(dirname "$DATA_DIR")/.seeded"
+  if [ -f "$SEED_MARKER" ]; then
+    echo "[entrypoint] 检测到初始化标记 $SEED_MARKER，跳过演示数据（保留现有数据）"
+  else
+    echo "[entrypoint] 写入演示数据（SEED_DEMO=1，仅首次执行）"
+    pnpm --filter @wmcms/api db:seed
+    touch "$SEED_MARKER"
+    echo "[entrypoint] 已初始化标记 $SEED_MARKER，后续启动不再灌数据；如需重新初始化请手动删除该标记"
+  fi
 fi
 
 echo "[entrypoint] 启动 API :$API_PORT"

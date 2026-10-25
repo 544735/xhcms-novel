@@ -98,7 +98,8 @@ export async function SearchView({
             total={data.total}
             pageSize={data.pageSize || pageSize}
             basePath={basePath}
-            pathname={`/search?q=${encodeURIComponent(keyword)}`}
+            pathname="/search"
+            query={{ q: keyword }}
             className="mt-10 border-t border-border pt-4"
           />
         </>

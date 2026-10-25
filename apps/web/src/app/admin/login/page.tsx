@@ -184,27 +184,6 @@ export default function AdminLoginPage() {
             </Button>
           </form>
 
-          <div className="mt-6 rounded-xl border border-border bg-muted/40 p-3.5">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">演示账号</p>
-            <div className="mt-2 space-y-1 font-mono text-[11px] text-foreground/80">
-              <p>
-                admin <span className="text-muted-foreground">/</span> Admin@123456
-                <span className="ml-1.5 rounded bg-primary/10 px-1 py-0.5 font-sans text-[10px] text-primary">
-                  超管
-                </span>
-              </p>
-              <p>
-                editor <span className="text-muted-foreground">/</span> Editor@123456
-                <span className="ml-1.5 rounded bg-muted px-1 py-0.5 font-sans text-[10px] text-muted-foreground">
-                  编辑
-                </span>
-              </p>
-            </div>
-            <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
-              账号由 `pnpm db:seed` 生成，可在 apps/api/.env 中通过 SEED_*_PASSWORD 覆盖。
-            </p>
-          </div>
-
           <p className="mt-6 text-center text-[11px] text-muted-foreground">
             登录即表示你同意遵守站点的内容管理规范
           </p>

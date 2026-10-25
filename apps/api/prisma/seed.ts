@@ -8,6 +8,9 @@
  */
 import { PrismaClient } from '@prisma/client';
 import { hashSync } from 'bcryptjs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   ALL_PERMISSIONS,
   BUILTIN_PLUGINS,
@@ -19,10 +22,71 @@ import {
 
 const prisma = new PrismaClient();
 
-const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'Admin@123456';
-const EDITOR_PASSWORD = process.env.SEED_EDITOR_PASSWORD ?? 'Editor@123456';
-const OPERATOR_PASSWORD = process.env.SEED_OPERATOR_PASSWORD ?? 'Operator@123456';
-const MEMBER_PASSWORD = process.env.SEED_MEMBER_PASSWORD ?? 'Member@123456';
+/**
+ * 生产环境不允许回落到仓库里的演示口令：未显式提供 SEED_*_PASSWORD 时随机生成，
+ * 并写入凭据文件，供运维首次登录后立即修改。
+ * 开发/测试环境保留固定默认值——本地演示与 e2e 依赖它。
+ */
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+/** 本次实际由随机生成（而非环境变量提供）的口令键 */
+const GENERATED_PASSWORD_KEYS = new Set<string>();
+
+/** 凭据文件：默认 apps/api/.seed-credentials.txt；可用 SEED_CREDENTIALS_FILE 覆盖（容器内建议指向 /data） */
+const CREDENTIALS_FILE =
+  process.env.SEED_CREDENTIALS_FILE ?? join(__dirname, '..', '.seed-credentials.txt');
+
+function resolveSeedPassword(envKey: string, devFallback: string): string {
+  const fromEnv = process.env[envKey]?.trim();
+  if (fromEnv) return fromEnv;
+  if (!IS_PROD) return devFallback;
+  GENERATED_PASSWORD_KEYS.add(envKey);
+  return randomBytes(12).toString('base64url');
+}
+
+const ADMIN_PASSWORD = resolveSeedPassword('SEED_ADMIN_PASSWORD', 'Admin@123456');
+const EDITOR_PASSWORD = resolveSeedPassword('SEED_EDITOR_PASSWORD', 'Editor@123456');
+const OPERATOR_PASSWORD = resolveSeedPassword('SEED_OPERATOR_PASSWORD', 'Operator@123456');
+const MEMBER_PASSWORD = resolveSeedPassword('SEED_MEMBER_PASSWORD', 'Member@123456');
+
+const ACCOUNT_PASSWORD_LABELS: Record<string, string> = {
+  SEED_ADMIN_PASSWORD: '超级管理员 admin',
+  SEED_EDITOR_PASSWORD: '内容编辑 editor',
+  SEED_OPERATOR_PASSWORD: '运营专员 operator',
+  SEED_MEMBER_PASSWORD: '读者与作者（alice / bob / carol / xinghe / moxiang / newauthor）',
+};
+
+/**
+ * 生产环境把随机生成的口令落盘（已存在则不覆盖：运维可能已保存或已改过口令）。
+ * 在写库之前调用，避免 seed 中途失败后拿不到初始口令。
+ */
+function persistGeneratedCredentials(): string | null {
+  if (!IS_PROD || GENERATED_PASSWORD_KEYS.size === 0) return null;
+  if (existsSync(CREDENTIALS_FILE)) {
+    console.log(`🔑 凭据文件已存在，未覆盖：${CREDENTIALS_FILE}（如需重新生成口令请先删除该文件）`);
+    return CREDENTIALS_FILE;
+  }
+  const passwords: Record<string, string> = {
+    SEED_ADMIN_PASSWORD: ADMIN_PASSWORD,
+    SEED_EDITOR_PASSWORD: EDITOR_PASSWORD,
+    SEED_OPERATOR_PASSWORD: OPERATOR_PASSWORD,
+    SEED_MEMBER_PASSWORD: MEMBER_PASSWORD,
+  };
+  const lines = [
+    '# XHCMS Novel 初始账号凭据（NODE_ENV=production 首次 seed 随机生成）',
+    `# 生成时间：${new Date().toISOString()}`,
+    '# 请立即登录后台修改这些口令，然后删除本文件；切勿提交到版本库。',
+    '',
+  ];
+  for (const [key, label] of Object.entries(ACCOUNT_PASSWORD_LABELS)) {
+    if (!GENERATED_PASSWORD_KEYS.has(key)) continue;
+    lines.push(`${label}：${passwords[key]}`);
+  }
+  lines.push('');
+  writeFileSync(CREDENTIALS_FILE, lines.join('\n'), { encoding: 'utf8', mode: 0o600 });
+  console.log(`🔑 初始口令已写入凭据文件：${CREDENTIALS_FILE}`);
+  return CREDENTIALS_FILE;
+}
 
 const json = (value: unknown): string => JSON.stringify(value);
 const daysAgo = (days: number, hour = 10): Date => {
@@ -302,6 +366,9 @@ const CATEGORY_SEEDS: Record<'books' | 'ink', { name: string; slug: string; icon
 
 async function main(): Promise<void> {
   console.log('\n🌱 初始化 XHCMS 小说站演示数据 …\n');
+
+  // 生产环境口令是随机生成的：先落盘再写库，避免 seed 中途失败后拿不到初始口令
+  const credentialsFile = persistGeneratedCredentials();
 
   // ---------- 清理（按依赖顺序） ----------
   await prisma.auditLog.deleteMany();
@@ -718,11 +785,15 @@ async function main(): Promise<void> {
   }
   console.log(`✅ 书籍 ${createdNovels.size} 本 / 章节 ${chapterTotal} 章`);
 
-  // ---------- 媒体库（书籍封面，来自本地 SVG） ----------
+  // ---------- 媒体库（演示封面占位） ----------
+  // 上传白名单 UPLOAD_ALLOWED_MIME 只接受位图/PDF（不含 image/svg+xml，SVG 直链可触发存储型 XSS），
+  // 而 apps/web/public/covers/ 下只有 .svg 封面，因此这里改用受支持的 image/png 占位 URL：
+  // 占位文件不在磁盘上，仅用于后台「媒体库」演示；真实上传会生成 /uploads/<siteId>/<yyyyMM>/<uuid>.png。
+  const MEDIA_PLACEHOLDER_URL = '/uploads/demo/demo-cover.png';
   const mediaSeeds = NOVEL_SEEDS.slice(0, 6).map((seed) => ({
     siteId: sitesBySlug[seed.siteSlug].id,
-    name: `${seed.slug}.svg`,
-    url: `/covers/${seed.slug}.svg`,
+    name: `${seed.slug}.png`,
+    url: MEDIA_PLACEHOLDER_URL,
   }));
   for (const [index, item] of mediaSeeds.entries()) {
     await prisma.media.create({
@@ -730,7 +801,7 @@ async function main(): Promise<void> {
         siteId: item.siteId,
         filename: item.name,
         originalName: item.name,
-        mimeType: 'image/svg+xml',
+        mimeType: 'image/png',
         size: 1_800 + index * 120,
         width: 1200,
         height: 750,
@@ -740,7 +811,7 @@ async function main(): Promise<void> {
       },
     });
   }
-  console.log(`✅ 媒体库：${mediaSeeds.length} 个书籍封面`);
+  console.log(`✅ 媒体库：${mediaSeeds.length} 个封面（image/png 演示占位）`);
 
   // ---------- 充值订单 / 流水 / 解锁 ----------
   const orderSeeds = [
@@ -968,11 +1039,22 @@ async function main(): Promise<void> {
   console.log('\n🎉 小说站初始化完成！\n');
   console.log('   门户：http://localhost:3000 （默认 books 站）· http://localhost:3000/ink');
   console.log('   后台：http://localhost:3000/admin');
-  console.log(`   超级管理员：admin / ${ADMIN_PASSWORD}`);
-  console.log(`   内容编辑：editor / ${EDITOR_PASSWORD}`);
-  console.log(`   运营专员：operator / ${OPERATOR_PASSWORD}`);
-  console.log(`   读者：alice / ${MEMBER_PASSWORD}（书币 860，含已购章节）`);
-  console.log(`   作者：xinghe / ${MEMBER_PASSWORD}（笔名 星河散人）`);
+  if (IS_PROD) {
+    // 生产环境不把口令写进日志（docker logs / CI 日志 / 部署日志都可能被更多人看到）
+    console.log('   超级管理员：admin（口令未在日志中输出）');
+    console.log('   内容编辑：editor ｜ 运营专员：operator ｜ 读者：alice ｜ 作者：xinghe');
+    console.log(
+      credentialsFile
+        ? `   初始口令：见 ${credentialsFile}（请立即登录后台修改，然后删除该文件）`
+        : '   初始口令：由 SEED_*_PASSWORD 环境变量提供，未写入磁盘',
+    );
+  } else {
+    console.log(`   超级管理员：admin / ${ADMIN_PASSWORD}`);
+    console.log(`   内容编辑：editor / ${EDITOR_PASSWORD}`);
+    console.log(`   运营专员：operator / ${OPERATOR_PASSWORD}`);
+    console.log(`   读者：alice / ${MEMBER_PASSWORD}（书币 860，含已购章节）`);
+    console.log(`   作者：xinghe / ${MEMBER_PASSWORD}（笔名 星河散人）`);
+  }
   console.log('\n');
 }
 

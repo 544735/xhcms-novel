@@ -254,9 +254,17 @@ export function portalUrl(basePath: string, pathname = ''): string {
 }
 
 /**
+ * XML 中可能出现绝对链接的标签（sitemap 用 loc，RSS 用 link/guid；guid 带属性如
+ * `<guid isPermaLink="true">`）。只处理这些文本节点，其余正文一律不动。
+ */
+const XML_URL_TAG_PATTERN = /<(loc|link|guid)(\s[^>]*)?>([\s\S]*?)<\/\1>/gi;
+
+/**
  * 把后端 XML（sitemap / rss）中的绝对链接改写到门户域名。
  * 后端按其自身 PUBLIC_SITE_URL 生成链接（开发环境常是 :4000），门户转发时统一改写为
- * NEXT_PUBLIC_SITE_URL，保证 sitemap/RSS 里的 <loc>/<link> 指向真实前台地址。
+ * NEXT_PUBLIC_SITE_URL，保证 sitemap/RSS 里的 <loc>/<link>/<guid> 指向真实前台地址。
+ *
+ * 只替换上述标签的文本节点，且不保留硬编码兜底域名：正文/标题里即使出现同样的字符串也不会被误改。
  */
 export function rewriteXmlOrigins(xml: string): string {
   const portalOrigin = SITE_URL.replace(/\/+$/, '');
@@ -264,16 +272,48 @@ export function rewriteXmlOrigins(xml: string): string {
     try {
       return new URL(SERVER_API_BASE).origin;
     } catch {
-      return 'http://localhost:4000';
+      return null;
     }
   })();
-  return xml
-    .split(apiOrigin)
-    .join(portalOrigin)
-    .split('http://localhost:4000')
-    .join(portalOrigin)
-    .split('http://127.0.0.1:4000')
-    .join(portalOrigin);
+  if (!apiOrigin || apiOrigin === portalOrigin) return xml;
+
+  return xml.replace(
+    XML_URL_TAG_PATTERN,
+    (match: string, tag: string, attrs: string | undefined, raw: string) => {
+      if (!raw.includes(apiOrigin)) return match;
+      const value = raw.split(apiOrigin).join(portalOrigin);
+      return `<${tag}${attrs ?? ''}>${value}</${tag}>`;
+    },
+  );
+}
+
+/**
+ * 给 sitemap / RSS 里的绝对链接补上站点前缀（`[site]` 前缀入口专用）。
+ * 后端生成的永远是默认入口的无前缀 URL（`/book/x`），前缀站点转发时必须变成
+ * `/ink/book/x`，否则 /ink/sitemap.xml 会把爬虫指回 Host 解析出的默认站点。
+ *
+ * 只处理 `<loc>` / `<link>` / `<guid>` 文本节点，且只动门户同源链接；已带前缀的幂等跳过。
+ */
+export function prefixXmlPaths(xml: string, basePath: string): string {
+  const prefix = portalPath(basePath);
+  if (!prefix || prefix === '/') return xml;
+  const portalOrigin = SITE_URL.replace(/\/+$/, '');
+
+  return xml.replace(
+    XML_URL_TAG_PATTERN,
+    (match: string, tag: string, attrs: string | undefined, raw: string) => {
+      let url: URL;
+      try {
+        url = new URL(raw.trim());
+      } catch {
+        return match;
+      }
+      if (url.origin !== portalOrigin) return match;
+      if (url.pathname === prefix || url.pathname.startsWith(`${prefix}/`)) return match;
+      const nextPath = url.pathname === '/' ? prefix : `${prefix}${url.pathname}`;
+      return `<${tag}${attrs ?? ''}>${url.origin}${nextPath}${url.search}${url.hash}</${tag}>`;
+    },
+  );
 }
 
 /** 列表页分页 URL（第 1 页不带 query） */

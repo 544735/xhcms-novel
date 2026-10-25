@@ -124,8 +124,8 @@ CORS_ORIGINS 由 PUBLIC_URL 自动使用
 
 ### 4.3 首次数据与演示账号
 
-- `.env` 中 `SEED_DEMO=1` 时，首次启动会写入演示数据（7 本书 / 70 章 / 双站点 / VIP 订单 / 书评 / 采集书源），初始化完成后建议改回 `0`；
-- 演示账号：`admin / Admin@123456`、`reader`：`alice / Member@123456`、作者：`xinghe / Member@123456`；**上线前务必修改**。
+- `.env` 中 `SEED_DEMO=1` 时，首次启动会写入演示数据（7 本书 / 70 章 / 双站点 / VIP 订单 / 书评 / 采集书源），入口脚本会在 `/data/.seeded` 写初始化标记，之后的重启不会重复灌数据；初始化完成后建议改回 `0`；
+- 生产环境（`NODE_ENV=production`）首次 seed 未提供 `SEED_*_PASSWORD` 时会**随机生成**管理员口令并写入 `apps/api/.seed-credentials.txt`（容器内可用 `SEED_CREDENTIALS_FILE` 指到 `/data` 卷），日志不打印口令：`docker compose exec xhcms cat /app/apps/api/.seed-credentials.txt` 读取；也可在 seed 前用 `SEED_ADMIN_PASSWORD` / `SEED_EDITOR_PASSWORD` / `SEED_OPERATOR_PASSWORD` / `SEED_MEMBER_PASSWORD` 指定。首个登录后请立即改密并删除该文件。仅本地开发/演示（`NODE_ENV` 非 production）才使用 `Admin@123456` 等默认口令；
 - 生产环境务必使用随机 JWT 密钥（脚本已自动生成）。
 
 ### 4.4 数据备份与升级

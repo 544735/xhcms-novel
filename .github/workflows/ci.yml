@@ -11,9 +11,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   quality:
-    name: 类型检查 / 构建 / E2E
+    name: 类型检查 / 单测 / 构建 / E2E
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -59,6 +62,12 @@ jobs:
 
       - name: 类型检查
         run: pnpm typecheck
+
+      - name: Prisma Schema 校验
+        run: pnpm --filter @wmcms/api exec prisma validate
+
+      - name: 单元测试
+        run: pnpm --filter @wmcms/api test:unit
 
       - name: 生产构建
         run: pnpm build

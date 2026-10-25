@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import type { SettingsMap } from '@wmcms/shared';
 import { AuditService } from '../../common/audit/audit.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -29,10 +29,15 @@ export class SettingsService {
     return map;
   }
 
-  /** 读取设置（带站点授权校验） */
+  /** 读取设置（全局设置仅超管可见；站点设置校验站点授权） */
   async read(siteId: string | undefined, auth: AuthContext): Promise<SettingsMap> {
     const scoped = siteId ?? null;
-    if (scoped) assertSiteAccess(auth, scoped);
+    if (scoped) {
+      assertSiteAccess(auth, scoped);
+    } else if (!auth.isSuperAdmin) {
+      // 全局设置作用于整个平台，站点管理员不得读取
+      throw new ForbiddenException('仅超级管理员可查看全局设置');
+    }
     return this.getMap(scoped);
   }
 
@@ -52,6 +57,9 @@ export class SettingsService {
         select: { id: true },
       });
       if (!site) throw new BadRequestException('站点不存在');
+    } else if (!auth.isSuperAdmin) {
+      // siteId 为 null 即平台级全局设置，站点管理员不得写入（含 body 显式传 null 的情形）
+      throw new ForbiddenException('仅超级管理员可修改全局设置');
     }
 
     const savedKeys: string[] = [];
@@ -68,19 +76,22 @@ export class SettingsService {
           create: { siteId, key, value, group },
         });
       } else {
-        // SQLite 的唯一索引对 NULL 不去重，全局设置需手工查重后更新
-        const existing = await this.prisma.setting.findFirst({
-          where: { siteId: null, key },
-          select: { id: true },
-        });
-        if (existing) {
-          await this.prisma.setting.update({
-            where: { id: existing.id },
-            data: { value, group },
+        // SQLite 的唯一索引对 NULL 不去重，全局设置需手工查重后更新；
+        // 查重 + 写入放进同一事务，避免并发请求同时查不到再各建一行
+        await this.prisma.$transaction(async (tx) => {
+          const existing = await tx.setting.findFirst({
+            where: { siteId: null, key },
+            select: { id: true },
           });
-        } else {
-          await this.prisma.setting.create({ data: { siteId: null, key, value, group } });
-        }
+          if (existing) {
+            await tx.setting.update({
+              where: { id: existing.id },
+              data: { value, group },
+            });
+          } else {
+            await tx.setting.create({ data: { siteId: null, key, value, group } });
+          }
+        });
       }
       savedKeys.push(key);
     }

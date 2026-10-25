@@ -26,6 +26,17 @@ const SUPER_ADMIN_ROLE_CODE = 'super_admin';
 const uniqueIds = (ids?: string[]): string[] =>
   ids ? [...new Set(ids.map((id) => id.trim()).filter(Boolean))] : [];
 
+/** 两组 ID 是否等价（用于判断「自我编辑」是否真的改动了角色/站点） */
+const sameIdSet = (left: string[], right: string[]): boolean => {
+  const a = new Set(left);
+  const b = new Set(right);
+  if (a.size !== b.size) return false;
+  for (const value of a) {
+    if (!b.has(value)) return false;
+  }
+  return true;
+};
+
 /**
  * 管理员账号管理。
  * 规则：不可删除/禁用自己；不可删除最后一个超管；super_admin 角色与超管标记仅超管可分配。
@@ -92,8 +103,8 @@ export class UsersService {
 
     const roleIds = uniqueIds(dto.roleIds);
     const siteIds = uniqueIds(dto.siteIds);
-    const roles = await this.assertRoles(roleIds);
-    await this.assertSites(siteIds);
+    const roles = await this.assertRoles(roleIds, current);
+    await this.assertSites(siteIds, current);
 
     const wantsSuperAdmin =
       dto.isSuperAdmin === true || roles.some((role) => role.code === SUPER_ADMIN_ROLE_CODE);
@@ -137,6 +148,15 @@ export class UsersService {
   ): Promise<AdminUser> {
     const existing = await this.prisma.user.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('管理员不存在');
+    this.assertCanManageTarget(current, existing);
+
+    // 最后一个超管不可被降级，否则系统将无人能分配超管
+    if (dto.isSuperAdmin === false && existing.isSuperAdmin) {
+      const superAdminCount = await this.prisma.user.count({ where: { isSuperAdmin: true } });
+      if (superAdminCount <= 1) {
+        throw new BadRequestException('系统至少需要保留一个超级管理员');
+      }
+    }
 
     const username = dto.username?.trim() ?? existing.username;
     const email = dto.email?.trim() ?? existing.email;
@@ -144,8 +164,41 @@ export class UsersService {
 
     const roleIds = dto.roleIds ? uniqueIds(dto.roleIds) : undefined;
     const siteIds = dto.siteIds ? uniqueIds(dto.siteIds) : undefined;
-    const roles = roleIds ? await this.assertRoles(roleIds) : undefined;
-    if (siteIds) await this.assertSites(siteIds);
+
+    // 禁止通过编辑自己完成提权：仅当角色/站点/超管标记发生实际变化时拒绝，
+    // 避免后台「编辑自己」时的常规保存（前端总会带上 roleIds/siteIds）被误拦。
+    if (id === current.id) {
+      const changesSuperAdmin =
+        dto.isSuperAdmin !== undefined && dto.isSuperAdmin !== existing.isSuperAdmin;
+      let changesRoles = false;
+      let changesSites = false;
+      if (roleIds) {
+        const rows = await this.prisma.userRole.findMany({
+          where: { userId: id },
+          select: { roleId: true },
+        });
+        changesRoles = !sameIdSet(
+          rows.map((row) => row.roleId),
+          roleIds,
+        );
+      }
+      if (siteIds) {
+        const rows = await this.prisma.userSite.findMany({
+          where: { userId: id },
+          select: { siteId: true },
+        });
+        changesSites = !sameIdSet(
+          rows.map((row) => row.siteId),
+          siteIds,
+        );
+      }
+      if (changesSuperAdmin || changesRoles || changesSites) {
+        throw new BadRequestException('不能修改自己的角色、站点或超级管理员标记');
+      }
+    }
+
+    const roles = roleIds ? await this.assertRoles(roleIds, current) : undefined;
+    if (siteIds) await this.assertSites(siteIds, current);
 
     const nextSuperAdmin = dto.isSuperAdmin ?? existing.isSuperAdmin;
     const assignsSuperAdminRole =
@@ -167,6 +220,10 @@ export class UsersService {
       if (dto.nickname !== undefined) data.nickname = dto.nickname;
       if (dto.avatar !== undefined) data.avatar = dto.avatar;
       if (dto.status !== undefined) data.status = dto.status;
+      // 管理员重置他人密码、或账号由其他状态变为禁用时，自增令牌版本使目标账号旧令牌立即失效
+      if (password || (dto.status === 'disabled' && existing.status !== 'disabled')) {
+        data.tokenVersion = { increment: 1 };
+      }
       if (dto.isSuperAdmin !== undefined) data.isSuperAdmin = dto.isSuperAdmin;
       if (password) data.password = password;
       await tx.user.update({ where: { id }, data });
@@ -214,8 +271,16 @@ export class UsersService {
     }
     const target = await this.prisma.user.findUnique({ where: { id } });
     if (!target) throw new NotFoundException('管理员不存在');
+    this.assertCanManageTarget(current, target);
 
-    await this.prisma.user.update({ where: { id }, data: { status: dto.status } });
+    // 禁用时自增令牌版本，使目标账号已签发的 access/refresh 令牌立即失效
+    await this.prisma.user.update({
+      where: { id },
+      data:
+        dto.status === 'disabled'
+          ? { status: dto.status, tokenVersion: { increment: 1 } }
+          : { status: dto.status },
+    });
     this.authContext.invalidate(id);
     await this.audit.log(req, {
       action: 'user.status',
@@ -230,6 +295,7 @@ export class UsersService {
     if (id === current.id) throw new BadRequestException('不能删除当前登录账号');
     const target = await this.prisma.user.findUnique({ where: { id } });
     if (!target) throw new NotFoundException('管理员不存在');
+    this.assertCanManageTarget(current, target);
     if (target.isSuperAdmin) {
       const superAdminCount = await this.prisma.user.count({ where: { isSuperAdmin: true } });
       if (superAdminCount <= 1) {
@@ -258,6 +324,19 @@ export class UsersService {
     }
   }
 
+  /**
+   * 目标账号为超管时，只有超管才能操作。
+   * 防止低权管理员通过「重置超管密码 / 禁用 / 删除超管」接管系统。
+   */
+  private assertCanManageTarget(
+    current: AuthContext,
+    target: { isSuperAdmin: boolean; username: string },
+  ): void {
+    if (target.isSuperAdmin && !current.isSuperAdmin) {
+      throw new ForbiddenException('无权操作超级管理员账号');
+    }
+  }
+
   private async assertUniqueAccount(
     username: string,
     email: string,
@@ -278,23 +357,48 @@ export class UsersService {
     if (byEmail) throw new ConflictException('邮箱已被使用');
   }
 
-  private async assertRoles(roleIds: string[]): Promise<{ id: string; code: string }[]> {
+  /**
+   * 角色存在性 + 授权上限校验。
+   * 非超管只能授予「权限码完全落在自身权限集内」的角色，防止借用户编辑接口自提权。
+   */
+  private async assertRoles(
+    roleIds: string[],
+    current: AuthContext,
+  ): Promise<{ id: string; code: string }[]> {
     if (!roleIds.length) return [];
     const roles = await this.prisma.role.findMany({
       where: { id: { in: roleIds } },
-      select: { id: true, code: true },
+      include: { permissions: { include: { permission: true } } },
     });
     if (roles.length !== roleIds.length) {
       throw new BadRequestException('存在无效的角色 ID');
     }
-    return roles;
+    if (!current.isSuperAdmin) {
+      const overPowered = roles.filter((role) =>
+        role.permissions.some((item) => !current.permissionCodes.has(item.permission.code)),
+      );
+      if (overPowered.length) {
+        throw new ForbiddenException('不能授予高于自身权限的角色');
+      }
+    }
+    return roles.map((role) => ({ id: role.id, code: role.code }));
   }
 
-  private async assertSites(siteIds: string[]): Promise<void> {
+  /**
+   * 站点存在性 + 归属校验。
+   * 非超管只能把管理员加入自己已被授权的站点，避免跨租户扩权。
+   */
+  private async assertSites(siteIds: string[], current: AuthContext): Promise<void> {
     if (!siteIds.length) return;
     const count = await this.prisma.site.count({ where: { id: { in: siteIds } } });
     if (count !== siteIds.length) {
       throw new BadRequestException('存在无效的站点 ID');
+    }
+    if (!current.isSuperAdmin) {
+      const unauthorized = siteIds.filter((siteId) => !current.siteIds.has(siteId));
+      if (unauthorized.length) {
+        throw new ForbiddenException('无权管理目标站点');
+      }
     }
   }
 }

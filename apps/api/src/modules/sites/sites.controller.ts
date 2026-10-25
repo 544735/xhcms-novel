@@ -41,8 +41,8 @@ export class SitesController {
   @Get(':id')
   @RequirePermissions('site:view')
   @ApiOperation({ summary: '站点详情' })
-  findOne(@Param('id') id: string): Promise<Site> {
-    return this.sites.findOne(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<Site> {
+    return this.sites.findOne(id, user);
   }
 
   @Post()
@@ -59,14 +59,19 @@ export class SitesController {
     @Param('id') id: string,
     @Body() dto: UpdateSiteDto,
     @Req() req: AuthenticatedRequest,
+    @CurrentUser() user: AuthContext,
   ): Promise<Site> {
-    return this.sites.update(id, dto, req);
+    return this.sites.update(id, dto, req, user);
   }
 
   @Delete(':id')
   @RequirePermissions('site:delete')
   @ApiOperation({ summary: '删除站点（存在文章时拒绝）' })
-  remove(@Param('id') id: string, @Req() req: AuthenticatedRequest): Promise<null> {
-    return this.sites.remove(id, req);
+  remove(
+    @Param('id') id: string,
+    @Req() req: AuthenticatedRequest,
+    @CurrentUser() user: AuthContext,
+  ): Promise<null> {
+    return this.sites.remove(id, req, user);
   }
 }

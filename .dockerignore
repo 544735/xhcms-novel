@@ -10,11 +10,11 @@ screenshots
 docs
 .git
 .github
-*.log
+**/*.log
 *.pid
-.env
-.env.*
-!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 apps/api/prisma/*.db
 apps/api/prisma/*.db-wal
 apps/api/prisma/*.db-shm

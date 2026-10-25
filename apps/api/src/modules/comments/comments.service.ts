@@ -21,7 +21,9 @@ type CommentWithArticle = Prisma.CommentGetPayload<{
   include: { article: { select: { id: true; title: true; slug: true } } };
 }>;
 
-type PublicCommentRow = Prisma.CommentGetPayload<{ include: { member: true } }>;
+type PublicCommentRow = Prisma.CommentGetPayload<{
+  include: { member: { select: { id: true; nickname: true; avatar: true } } };
+}>;
 
 /** 评论内容上限（与共享契约 / 插件校验保持一致） */
 const CONTENT_MAX_LENGTH = 2000;
@@ -29,6 +31,10 @@ const CONTENT_MAX_LENGTH = 2000;
 const DUPLICATE_WINDOW_MS = 60_000;
 /** 区块审核默认开启 */
 const DEFAULT_COMMENT_AUDIT = true;
+/** 公开评论树单次返回上限（爆款文章不至于一次拉回数万条） */
+const PUBLIC_TREE_LIMIT = 500;
+/** 允许的最大回复层级：根评论 = 0，最多再嵌套 3 层 */
+const MAX_COMMENT_DEPTH = 3;
 
 function toComment(row: CommentWithArticle): Comment {
   return {
@@ -174,7 +180,9 @@ export class CommentsService {
     const rows = await this.prisma.comment.findMany({
       where: { siteId: site.id, articleId: article.id, status: 'approved' },
       orderBy: { createdAt: 'asc' },
-      include: { member: true },
+      take: PUBLIC_TREE_LIMIT,
+      // 只取渲染需要的会员字段（不要 include:true，避免把 password/email 读进进程）
+      include: { member: { select: { id: true, nickname: true, avatar: true } } },
     });
 
     return buildTree(rows.map(toPublicComment));
@@ -215,14 +223,20 @@ export class CommentsService {
     const nickname = memberNickname ?? nicknameInput;
     if (!nickname) throw new BadRequestException('请填写昵称');
 
-    // 4) 父评论校验
+    // 4) 父评论校验 + 层级限制（避免无限嵌套拖垮递归渲染）
     let parentId: string | null = null;
     if (dto.parentId) {
       const parent = await this.prisma.comment.findFirst({
         where: { id: dto.parentId, siteId: site.id, articleId: article.id },
-        select: { id: true },
+        select: { id: true, parentId: true },
       });
       if (!parent) throw new BadRequestException('回复的评论不存在');
+      const parentDepth = await this.commentDepth(parent);
+      if (parentDepth + 1 > MAX_COMMENT_DEPTH) {
+        throw new BadRequestException(
+          `回复层级最多 ${MAX_COMMENT_DEPTH} 层，请直接回复上层评论`,
+        );
+      }
       parentId = parent.id;
     }
 
@@ -299,11 +313,34 @@ export class CommentsService {
 
   private async resolveArticle(siteId: string, articleSlug: string) {
     const article = await this.prisma.article.findFirst({
-      where: { siteId, slug: articleSlug },
+      // 草稿/归档不可评论：否则会产生挂不上前台的脏数据，并可被用来探测未发布 slug
+      where: { siteId, slug: articleSlug, status: 'published' },
       select: { id: true, title: true, slug: true },
     });
     if (!article) throw new NotFoundException('文章不存在');
     return article;
+  }
+
+  /**
+   * 评论深度（根评论 = 0）。
+   * 向上最多走 MAX_COMMENT_DEPTH 层即可判定，顺带用 visited 集合防止脏数据成环。
+   */
+  private async commentDepth(node: { id: string; parentId: string | null }): Promise<number> {
+    let depth = 0;
+    let cursor = node.parentId;
+    const seen = new Set<string>([node.id]);
+    while (cursor && depth < MAX_COMMENT_DEPTH) {
+      if (seen.has(cursor)) break;
+      seen.add(cursor);
+      const parent: { parentId: string | null } | null = await this.prisma.comment.findUnique({
+        where: { id: cursor },
+        select: { parentId: true },
+      });
+      if (!parent) break;
+      depth += 1;
+      cursor = parent.parentId;
+    }
+    return depth;
   }
 
   /** 站点 settings.commentAudit（默认 true） */
@@ -325,7 +362,12 @@ function toPublicComment(row: PublicCommentRow): PublicComment {
   };
 }
 
-/** 扁平列表 → 树形（孤儿节点提升为根，避免因审核状态导致评论丢失） */
+/**
+ * 扁平列表 → 树形（孤儿节点提升为根，避免因审核状态导致评论丢失）。
+ *
+ * 同时兜底层级：超过 MAX_COMMENT_DEPTH 的历史回复挂到「允许的最深祖先」下，
+ * 既不会产生无限递归，也不会把整条线程拉平成互不相关的根节点。
+ */
 function buildTree(rows: PublicComment[]): PublicComment[] {
   const map = new Map<string, PublicComment>();
   for (const row of rows) map.set(row.id, { ...row, children: [] });
@@ -333,7 +375,27 @@ function buildTree(rows: PublicComment[]): PublicComment[] {
   const roots: PublicComment[] = [];
   for (const row of rows) {
     const node = map.get(row.id)!;
-    const parent = row.parentId ? map.get(row.parentId) : undefined;
+    // 收集祖先链（chain[0] = 直接父级），环/断链时提前停止
+    const chain: string[] = [];
+    const seen = new Set<string>([row.id]);
+    let cursor: string | null = row.parentId;
+    while (cursor) {
+      if (seen.has(cursor) || !map.has(cursor)) break;
+      seen.add(cursor);
+      chain.push(cursor);
+      cursor = map.get(cursor)!.parentId;
+    }
+    if (!chain.length) {
+      roots.push(node);
+      continue;
+    }
+    // chain[i] 是「距本节点 i+1 层」的祖先；本节点渲染深度 = chain.length。
+    // 超深时挂到「渲染深度为 MAX-1 的祖先」下，让本节点恰好落在第 MAX 层。
+    const attachTo =
+      chain.length > MAX_COMMENT_DEPTH
+        ? chain[chain.length - MAX_COMMENT_DEPTH]
+        : chain[0];
+    const parent = map.get(attachTo);
     if (parent) parent.children.push(node);
     else roots.push(node);
   }

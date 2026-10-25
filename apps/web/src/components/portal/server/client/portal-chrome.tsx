@@ -23,7 +23,9 @@ export function PortalChrome({
   children: ReactNode;
 }) {
   const pathname = usePathname() ?? '';
-  const isReader = /^\/(?:[^/]+\/)?read(?:\/|$)/.test(pathname);
+  // 必须是 `/read/<novelSlug>/<chapterNo>`（可带站点前缀）才判定为阅读器，
+  // 避免 `/category/read`、`/book/read` 这类 slug 恰好叫 read 的普通页面被误判而丢掉站点头尾。
+  const isReader = /^\/(?:[^/]+\/)?read\/[^/]+\/[^/]+$/.test(pathname);
 
   if (isReader) {
     return <>{children}</>;

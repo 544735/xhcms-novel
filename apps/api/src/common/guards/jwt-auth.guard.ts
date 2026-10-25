@@ -41,7 +41,13 @@ export class JwtAuthGuard implements CanActivate {
       if (payload.type !== 'access') {
         throw new UnauthorizedException('令牌类型不正确');
       }
-      req.user = { id: payload.sub, username: payload.username, type: 'access' };
+      // tokenVersion 为令牌版本（旧令牌不带 ver，保持兼容由 RbacGuard 判定）
+      req.user = {
+        id: payload.sub,
+        username: payload.username,
+        type: 'access',
+        tokenVersion: payload.ver,
+      };
       return true;
     } catch {
       throw new UnauthorizedException('登录状态已失效，请重新登录');

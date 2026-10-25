@@ -27,7 +27,7 @@ export class CreateMemberDto {
   @MaxLength(120, { message: '邮箱最多 120 个字符' })
   email!: string;
 
-  @ApiProperty({ description: '登录密码（至少 8 位）', example: 'Member@123456' })
+  @ApiProperty({ description: '登录密码（至少 8 位）', example: 'YourPassword' })
   @IsString({ message: '密码必须为字符串' })
   @MinLength(8, { message: '密码至少 8 位' })
   @MaxLength(64, { message: '密码最多 64 位' })

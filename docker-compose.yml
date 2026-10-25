@@ -31,6 +31,10 @@ services:
       JWT_SECRET: ${JWT_SECRET:?请复制 deploy/docker-env.example 为 .env 并填写 JWT_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?缺少 JWT_REFRESH_SECRET}
       JWT_MEMBER_SECRET: ${JWT_MEMBER_SECRET:?缺少 JWT_MEMBER_SECRET}
+      # 决定 req.ip 的取值（限流分桶与审计 IP）。默认只信任 loopback：
+      # 若在容器/宿主机前再加一层 nginx，请按实际部署设置（如 "1" 或代理网段），
+      # 并避免把 4000 端口直接暴露到公网——否则客户端可伪造 X-Forwarded-For。
+      TRUST_PROXY: ${TRUST_PROXY:-loopback}
       SEED_DEMO: ${SEED_DEMO:-0}
     volumes:
       - xhcms-data:/data

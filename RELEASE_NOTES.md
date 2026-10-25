@@ -69,13 +69,13 @@ pnpm --filter @wmcms/web start
 
 | 角色 | 账号 / 密码 |
 | --- | --- |
-| 超级管理员 | admin / Admin@123456 |
-| 内容编辑 | editor / Editor@123456 |
-| 运营专员 | operator / Operator@123456 |
-| 读者 | alice / Member@123456 |
-| 作者 | xinghe / Member@123456 |
+| 超级管理员 | admin：生产随机生成，见 `apps/api/.seed-credentials.txt`（或 `SEED_ADMIN_PASSWORD`）；开发默认 `Admin@123456` |
+| 内容编辑 | editor：同上（`SEED_EDITOR_PASSWORD`）；开发默认 `Editor@123456` |
+| 运营专员 | operator：同上（`SEED_OPERATOR_PASSWORD`）；开发默认 `Operator@123456` |
+| 读者 | alice：同上（`SEED_MEMBER_PASSWORD`）；开发默认 `Member@123456` |
+| 作者 | xinghe：同上（`SEED_MEMBER_PASSWORD`）；开发默认 `Member@123456` |
 
-> 演示数据请在正式上线前重置并修改密码；生产环境必须配置独立 JWT 密钥。
+> 生产环境（`NODE_ENV=production`）首次 seed 若未提供 `SEED_*_PASSWORD`，会为上述账号随机生成口令并写入 `apps/api/.seed-credentials.txt`（容器内可用 `SEED_CREDENTIALS_FILE` 指到 `/data` 卷），日志不打印口令；首个登录后请立即改密并删除该文件。「开发默认」口令仅限本地开发/演示。演示数据请在正式上线前重置；生产环境必须配置独立 JWT 密钥。
 
 ## 包内容
 

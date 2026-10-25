@@ -1,14 +1,16 @@
 import type { Request } from 'express';
 
+/**
+ * 取客户端 IP。
+ *
+ * 只读 `req.ip`：Express 已按 `app.set('trust proxy', ...)` 的规则（见 main.ts）
+ * 从 X-Forwarded-For 中挑出「最右侧可信代理之前的第一个不可信地址」。
+ * 绝不自行解析 XFF —— nginx 的 `$proxy_add_x_forwarded_for` 会保留客户端自带的首段，
+ * 谁解析首段谁就被任意伪造。
+ */
 export function clientIp(req: Request): string | null {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.trim()) {
-    return forwarded.split(',')[0].trim().slice(0, 64);
-  }
-  if (Array.isArray(forwarded) && forwarded.length) {
-    return String(forwarded[0]).split(',')[0].trim().slice(0, 64);
-  }
-  return req.ip ? String(req.ip).slice(0, 64) : null;
+  const value = req.ip || req.socket?.remoteAddress || '';
+  return value ? String(value).slice(0, 64) : null;
 }
 
 export function userAgent(req: Request): string | null {

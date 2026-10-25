@@ -8,7 +8,12 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthenticatedRequest } from '../../common/types';
 import { ensureUniqueSlug, slugify } from '../../common/utils/slug.util';
 import { toSourceContext } from './book-sources.service';
-import { parseBookOutline, parseChapterContent, type ParsedBook } from './collect.parser';
+import {
+  parseBookOutline,
+  parseChapterContent,
+  type OutlineChapter,
+  type ParsedBook,
+} from './collect.parser';
 import { sleep } from './collect.utils';
 import type { QueryCollectTaskDto } from './dto/query-collect-task.dto';
 import type { RunCollectDto } from './dto/run-collect.dto';
@@ -189,14 +194,12 @@ export class CollectService {
   ): Promise<RunOutcome> {
     const ctx = toSourceContext(source);
     const parsed = await parseBookOutline(ctx, dto.bookUrl);
-    const outline = parsed.chapters.slice(0, limit);
-    const total = outline.length;
 
     let novelId = initialNovelId;
     if (!novelId) novelId = await this.findOrCreateNovel(siteId, parsed);
     if (!novelId) throw new BadRequestException('无法确定目标书籍');
 
-    if (total === 0) {
+    if (parsed.chapters.length === 0) {
       return {
         status: 'failed',
         total: 0,
@@ -208,11 +211,38 @@ export class CollectService {
       };
     }
 
+    // 幂等键：优先 sourceUrl；无 sourceUrl（JSON 源/手工章节）时回退标题
     const existing = await this.prisma.chapter.findMany({
       where: { novelId },
-      select: { title: true },
+      select: { title: true, sourceUrl: true },
     });
-    const existingTitles = new Set(existing.map((row) => row.title));
+    const existingUrls = new Set(
+      existing.map((row) => row.sourceUrl).filter((url): url is string => Boolean(url)),
+    );
+    const existingTitles = new Set(
+      existing.filter((row) => !row.sourceUrl).map((row) => row.title),
+    );
+    const isCollected = (chapter: OutlineChapter): boolean =>
+      chapter.url ? existingUrls.has(chapter.url) : existingTitles.has(chapter.title);
+
+    // 先过滤已采集章节，再取前 limit 条新增 —— 重复运行会继续往后追更而不是重采前 N 章
+    const pending = parsed.chapters.filter((chapter) => !isCollected(chapter));
+    const outline = pending.slice(0, limit);
+    const total = outline.length;
+
+    if (total === 0) {
+      const collectedCount = existing.length;
+      return {
+        status: 'partial',
+        total: 0,
+        succeeded: 0,
+        failed: 0,
+        skipped: 0,
+        message: `没有新增章节（已采集 ${collectedCount} 章，可能已追到最新）`,
+        novelId,
+      };
+    }
+
     const maxRow = await this.prisma.chapter.aggregate({
       where: { novelId },
       _max: { chapterNo: true },
@@ -225,30 +255,42 @@ export class CollectService {
     const messages: string[] = [];
 
     for (const chapter of outline) {
-      if (existingTitles.has(chapter.title)) {
-        skipped += 1;
-        continue;
-      }
       try {
         // 限速：每章抓取前等待 ≥300ms（JSON 正文随列表返回，无需额外请求）
         if (source.type !== 'json') await sleep(CHAPTER_DELAY_MS);
         const parsedChapter = await parseChapterContent(ctx, chapter);
-        if (existingTitles.has(parsedChapter.title)) {
+        // 无 url 的源（JSON/旧数据）在拿到正文页标题后再判一次重名
+        if (!chapter.url && existingTitles.has(parsedChapter.title)) {
           skipped += 1;
           continue;
         }
-        await this.prisma.chapter.create({
-          data: {
-            novelId,
-            chapterNo: nextNo,
-            title: parsedChapter.title,
-            content: parsedChapter.content,
-            wordCount: parsedChapter.wordCount,
-            status: 'published',
-            publishedAt: new Date(),
-          },
-        });
-        existingTitles.add(parsedChapter.title);
+        try {
+          await this.prisma.chapter.create({
+            data: {
+              novelId,
+              chapterNo: nextNo,
+              title: parsedChapter.title,
+              content: parsedChapter.content,
+              wordCount: parsedChapter.wordCount,
+              status: 'published',
+              publishedAt: new Date(),
+              // 采集来源地址：与 (novelId, sourceUrl) 唯一约束一起做幂等
+              sourceUrl: chapter.url,
+            },
+          });
+        } catch (error) {
+          // 并发/重复运行触发 (novelId, sourceUrl) 或 (novelId, chapterNo) 唯一冲突：计跳过而非整批失败
+          if (
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === 'P2002'
+          ) {
+            skipped += 1;
+            continue;
+          }
+          throw error;
+        }
+        if (chapter.url) existingUrls.add(chapter.url);
+        else existingTitles.add(parsedChapter.title);
         nextNo += 1;
         succeeded += 1;
       } catch (error) {
@@ -259,10 +301,14 @@ export class CollectService {
       }
     }
 
+    // 0 新增不能报 success（避免「全部已存在/全部失败」被误读为采集成功）
     const status: CollectTaskStatus =
-      failed === 0 ? 'success' : succeeded > 0 ? 'partial' : 'failed';
+      succeeded > 0 ? (failed === 0 ? 'success' : 'partial') : failed > 0 ? 'failed' : 'partial';
     if (succeeded > 0) messages.unshift(`成功采集 ${succeeded} 章`);
     if (skipped > 0) messages.push(`跳过已存在章节 ${skipped} 章`);
+    if (succeeded === 0 && failed === 0) {
+      messages.push('没有新增章节（本次选中的章节均已采集）');
+    }
 
     return {
       status,

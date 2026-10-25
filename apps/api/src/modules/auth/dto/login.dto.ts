@@ -8,7 +8,7 @@ export class LoginDto {
   @MaxLength(64, { message: '账号长度不能超过 64 个字符' })
   username: string;
 
-  @ApiProperty({ description: '登录密码', example: 'Admin@123456' })
+  @ApiProperty({ description: '登录密码', example: 'YourPassword' })
   @IsString({ message: '密码必须为字符串' })
   @IsNotEmpty({ message: '密码不能为空' })
   @MaxLength(128, { message: '密码长度不能超过 128 个字符' })

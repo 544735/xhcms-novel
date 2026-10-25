@@ -65,6 +65,8 @@ model User {
   nickname     String?
   avatar       String?
   status       String    @default("active")
+  /// 令牌版本：改密/登出/禁用时自增，使旧令牌失效
+  tokenVersion Int       @default(0)
   isSuperAdmin Boolean   @default(false)
   lastLoginAt  DateTime?
   lastLoginIp  String?
@@ -261,6 +263,8 @@ model Member {
   nickname    String?
   avatar      String?
   status      String    @default("active")
+  /// 令牌版本：改密/重置密码/禁用时自增，使旧令牌失效
+  tokenVersion Int      @default(0)
   points      Int       @default(0)
   lastLoginAt DateTime?
   createdAt   DateTime  @default(now())
@@ -413,6 +417,10 @@ model Novel {
   @@index([siteId, categoryId])
   @@index([siteId, isRecommend])
   @@index([siteId, status])
+  // 榜单（热度 / 收藏 / 最新）排序走索引，避免全表排序
+  @@index([siteId, auditStatus, views])
+  @@index([siteId, auditStatus, favorites])
+  @@index([siteId, auditStatus, publishedAt])
 }
 
 model Volume {
@@ -442,6 +450,7 @@ model Chapter {
   status      String    @default("published") // draft | published
   views       Int       @default(0)
   publishedAt DateTime?
+  sourceUrl   String? // 采集来源章节地址：幂等去重 + 追更定位（手工章节为 null）
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -451,6 +460,8 @@ model Chapter {
   comments NovelComment[]
 
   @@unique([novelId, chapterNo])
+  // SQLite 下 NULL 不参与唯一约束：手工/JSON 源章节（无 sourceUrl）不受影响
+  @@unique([novelId, sourceUrl])
   @@index([novelId, status, chapterNo])
 }
 
@@ -529,7 +540,7 @@ model CoinTransaction {
   remark    String?
   createdAt DateTime @default(now())
 
-  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  member Member @relation(fields: [memberId], references: [id], onDelete: Restrict) // 账务凭据不得随会员级联消失
 
   @@index([memberId, createdAt])
 }
@@ -545,7 +556,7 @@ model Order {
   paidAt      DateTime?
   createdAt   DateTime  @default(now())
 
-  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  member Member @relation(fields: [memberId], references: [id], onDelete: Restrict) // 充值订单不得随会员级联消失
 
   @@index([memberId, createdAt])
   @@index([status, createdAt])
@@ -554,15 +565,21 @@ model Order {
 model ChapterUnlock {
   id        String   @id @default(cuid())
   memberId  String
-  chapterId String
+  chapterId String? // 章节被删除后置空（SetNull），凭快照字段识别已购
   coins     Int      @default(0)
+  // 章节快照：章节被删除/重建（采集重导导致 id 变化）后仍能凭 (novelId, chapterNo) 识别已购
+  novelId   String?
+  chapterNo Int?
+  title     String?
   createdAt DateTime @default(now())
 
-  member  Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  member  Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  chapter Chapter? @relation(fields: [chapterId], references: [id], onDelete: SetNull)
 
+  // 可空唯一在 SQLite 下允许多行 NULL（章节被删后不会撞唯一约束）
   @@unique([memberId, chapterId])
   @@index([memberId, createdAt])
+  @@index([memberId, novelId, chapterNo])
 }
 
 model AuthorProfile {

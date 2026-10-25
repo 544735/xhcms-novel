@@ -20,7 +20,9 @@ export const vipGuardPlugin: BuiltinPluginDefinition = {
       const minChars = Number(ctx.config.minPreviewChars ?? VIP_MIN_PREVIEW_CHARS);
       const byRatio = Math.floor(content.length * (Number.isFinite(ratio) ? ratio : 0.25));
       const target = Math.max(minChars, Math.min(byRatio, 2000));
-      const preview = content.slice(0, target);
+      // 试读必须严格短于正文：短章（或 minPreviewChars 被配得很大）时不能把全文当 preview 下发
+      const limit = Math.min(target, Math.max(0, content.length - 1));
+      const preview = content.slice(0, limit);
       return {
         locked: true,
         preview,

@@ -120,12 +120,16 @@ export const MAX_PAGE_SIZE = 100;
 export const DEFAULT_SITE_SLUG = 'books';
 
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+/**
+ * 允许上传的 MIME 白名单。
+ * 注意：不含 `image/svg+xml` —— SVG 可内嵌 <script>，而 /uploads 与后台同源静态托管，
+ * 直链打开即等于存储型 XSS。如需图标请上传位图或在服务端渲染后再落盘。
+ */
 export const UPLOAD_ALLOWED_MIME = [
   'image/jpeg',
   'image/png',
   'image/webp',
   'image/gif',
-  'image/svg+xml',
   'application/pdf',
 ];
 

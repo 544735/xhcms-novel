@@ -205,6 +205,14 @@ export function ReaderShell({
     };
   }, [chapter, siteSlug, novelSlug]);
 
+  /* ---------------- 服务端正文变化时同步到本地状态 ---------------- */
+  // 上面那个 effect 在 `!chapter.locked` 时会提前 return（已解锁就不需要再带 token 补拉），
+  // 因此「服务端已解锁、本地 state 仍停在锁定态」的情况没人处理。这里做一次单向同步：
+  // 仅在服务端正文为已解锁时覆盖，锁定态交给上面的补拉 effect，避免把会员升级内容冲掉。
+  useEffect(() => {
+    if (!chapter.locked) setLiveChapter(chapter);
+  }, [chapter]);
+
   /* ---------------- 阅读进度 + 顶部进度条 ---------------- */
   useEffect(() => {
     const container = scrollRef.current;
@@ -273,13 +281,21 @@ export function ReaderShell({
     setUnlockError(null);
     try {
       await readerApi.unlockChapter(siteSlug, liveChapter.id);
+      // 解锁成功必须立刻带 token 重新拉一次正文：`router.refresh()` 只会更新服务端 props，
+      // 而 liveChapter 是本组件的 state，不会随之变化，用户会一直停在锁定态。
+      try {
+        const content = await readerApi.chapter(siteSlug, novelSlug, liveChapter.chapterNo);
+        if (!content.locked) setLiveChapter(content);
+      } catch {
+        /* 正文补拉失败时退回 router.refresh() 兜底 */
+      }
       router.refresh();
     } catch (error) {
       setUnlockError(error instanceof ApiError ? error.message : '解锁失败，请稍后重试');
     } finally {
       setUnlocking(false);
     }
-  }, [liveChapter.id, router, siteSlug]);
+  }, [liveChapter.id, liveChapter.chapterNo, novelSlug, router, siteSlug]);
 
   const updateSetting = <K extends keyof ReaderSettings>(key: K, value: ReaderSettings[K]) =>
     setSettings((prev) => ({ ...prev, [key]: value }));

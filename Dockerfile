@@ -20,6 +20,9 @@ RUN pnpm --filter @wmcms/api exec prisma generate
 
 COPY . .
 
+# 兜底清理：.dockerignore 已排除环境变量文件，这里再删一次，避免本地 .env 被打进镜像层
+RUN rm -f apps/api/.env apps/web/.env.local
+
 # 前端 API 地址在构建期写入（浏览器访问地址）
 ARG NEXT_PUBLIC_API_URL=http://localhost:4000/api/v1
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
@@ -42,6 +45,13 @@ RUN chmod +x /usr/local/bin/xhcms-entrypoint \
 
 VOLUME ["/data"]
 EXPOSE 3000 4000
+
+# 镜像级健康检查：探测 API 健康端点（Web 的就绪由入口脚本的启动顺序保证）
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:4000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# 安全说明：镜像当前以 root 运行，因为 /data 命名卷默认由 root 拥有、入口脚本需要写 SQLite 与上传目录。
+# 生产建议另建非 root 用户：先 chown 卷目录（或改用已授权的 bind mount），再在运行阶段加 USER app。
 
 # 入口会执行 prisma db push（可选 SEED_DEMO=1 写入演示数据），随后同时启动 API 与 Web
 ENTRYPOINT ["/usr/local/bin/xhcms-entrypoint"]

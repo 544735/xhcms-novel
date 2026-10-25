@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type { Tag as PrismaTag } from '@prisma/client';
 import type { Paginated, Tag } from '@wmcms/shared';
 import { AuditService } from '../../common/audit/audit.service';
@@ -95,10 +96,19 @@ export class TagsService {
       });
     }
 
-    const row = await this.prisma.tag.create({
-      data: { siteId, name, slug },
-      include: { _count: { select: { articles: true } } },
-    });
+    let row: TagCountRow;
+    try {
+      row = await this.prisma.tag.create({
+        data: { siteId, name, slug },
+        include: { _count: { select: { articles: true } } },
+      });
+    } catch (error) {
+      // 并发创建同名 slug 时唯一约束抛 P2002：预检查覆盖不到竞态，这里转成 409
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('标签名称或 slug 已存在，请更换');
+      }
+      throw error;
+    }
     await this.audit.log(req, {
       action: 'tag.create',
       resource: 'tag',
@@ -142,11 +152,19 @@ export class TagsService {
       }
     }
 
-    const row = await this.prisma.tag.update({
-      where: { id },
-      data,
-      include: { _count: { select: { articles: true } } },
-    });
+    let row: TagCountRow;
+    try {
+      row = await this.prisma.tag.update({
+        where: { id },
+        data,
+        include: { _count: { select: { articles: true } } },
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('标签名称或 slug 已存在，请更换');
+      }
+      throw error;
+    }
     await this.audit.log(req, {
       action: 'tag.update',
       resource: 'tag',

@@ -10,6 +10,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -71,6 +72,7 @@ export class FormFieldDto implements FormField {
   @IsOptional()
   @IsInt({ message: 'maxLength 必须为整数' })
   @Min(1, { message: 'maxLength 最小为 1' })
+  @Max(5000, { message: 'maxLength 最大为 5000' })
   maxLength?: number;
 }
 
@@ -86,6 +88,9 @@ export class CreateFormDto {
   @IsOptional()
   @IsString({ message: 'slug 必须为字符串' })
   @MaxLength(80, { message: 'slug 最多 80 个字符' })
+  @Matches(/^[a-z0-9][a-z0-9-]*$/, {
+    message: 'slug 只能包含小写字母、数字与连字符，且不能以连字符开头',
+  })
   slug?: string;
 
   @ApiPropertyOptional({ description: '表单说明' })

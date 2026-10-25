@@ -248,7 +248,7 @@ cat <<EOF
   API:       http://localhost:$API_PORT/api/v1
   API 文档:  http://localhost:$API_PORT/api/docs
 
-  演示账号:  admin / Admin@123456（首次部署建议加 --seed）
+  管理员账号:  admin（口令见 apps/api/.seed-credentials.txt 或 SEED_ADMIN_PASSWORD）
   服务日志:  logs/api.log  /  logs/web.log
   部署日志:  $DEPLOY_LOG
   停止服务:  bash deploy/stop-linux.sh

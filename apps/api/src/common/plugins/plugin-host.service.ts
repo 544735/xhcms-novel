@@ -21,9 +21,10 @@ interface RegisteredHandler {
 @Injectable()
 export class PluginHostService implements OnModuleInit {
   private readonly logger = new Logger(PluginHostService.name);
-  private readonly handlers = new Map<PluginHook, RegisteredHandler[]>();
-  private readonly configs = new Map<string, Record<string, unknown>>();
-  private readonly enabledPlugins = new Set<string>();
+  // 三个快照字段由 reload() 原子替换（构建完成后一次性赋值），故不加 readonly
+  private handlers = new Map<PluginHook, RegisteredHandler[]>();
+  private configs = new Map<string, Record<string, unknown>>();
+  private enabledPlugins = new Set<string>();
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -58,12 +59,12 @@ export class PluginHostService implements OnModuleInit {
     }
   }
 
-  /** 重新读取插件启用状态与配置（管理端切换开关后立即调用） */
+  /**
+   * 重新读取插件启用状态与配置（管理端切换开关后立即调用）。
+   * 先在局部快照上构建，全部就绪后再一次性原子替换，
+   * 避免「clear → await 查库」窗口期内所有钩子处理器静默失效。
+   */
   async reload(): Promise<void> {
-    this.handlers.clear();
-    this.configs.clear();
-    this.enabledPlugins.clear();
-
     let rows: { key: string; config: string | null }[] = [];
     try {
       rows = await this.prisma.plugin.findMany({
@@ -71,7 +72,8 @@ export class PluginHostService implements OnModuleInit {
         select: { key: true, config: true },
       });
     } catch (error) {
-      this.logger.warn(`读取插件配置失败，本次不启用任何插件：${(error as Error).message}`);
+      // 读取失败时保留上一份快照，避免故障期间插件能力整体消失
+      this.logger.warn(`读取插件配置失败，沿用上一次生效的插件配置：${(error as Error).message}`);
       return;
     }
 
@@ -79,6 +81,9 @@ export class PluginHostService implements OnModuleInit {
       BUILTIN_PLUGIN_DEFINITIONS.map((def) => [def.manifest.key, def]),
     );
 
+    const nextHandlers = new Map<PluginHook, RegisteredHandler[]>();
+    const nextConfigs = new Map<string, Record<string, unknown>>();
+    const nextEnabledPlugins = new Set<string>();
     let handlerCount = 0;
     for (const row of rows) {
       const definition = definitions.get(row.key);
@@ -86,19 +91,24 @@ export class PluginHostService implements OnModuleInit {
         this.logger.warn(`插件 ${row.key} 已在数据库启用，但缺少运行时实现，已跳过`);
         continue;
       }
-      this.enabledPlugins.add(row.key);
-      this.configs.set(row.key, {
+      nextEnabledPlugins.add(row.key);
+      nextConfigs.set(row.key, {
         ...definition.manifest.defaultConfig,
         ...parseJsonObject(row.config),
       });
       for (const [hook, fn] of Object.entries(definition.handlers)) {
         if (!fn) continue;
-        const list = this.handlers.get(hook as PluginHook) ?? [];
+        const list = nextHandlers.get(hook as PluginHook) ?? [];
         list.push({ pluginKey: row.key, fn: fn as HookHandler });
-        this.handlers.set(hook as PluginHook, list);
+        nextHandlers.set(hook as PluginHook, list);
         handlerCount += 1;
       }
     }
+
+    // 同步赋值：中间不存在「空快照」窗口，读路径只会看到旧快照或新快照
+    this.handlers = nextHandlers;
+    this.configs = nextConfigs;
+    this.enabledPlugins = nextEnabledPlugins;
 
     this.logger.log(
       `插件宿主就绪：${this.enabledPlugins.size} 个插件启用 / ${handlerCount} 个钩子处理器`,

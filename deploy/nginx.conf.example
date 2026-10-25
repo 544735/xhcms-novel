@@ -1,41 +1,92 @@
 # XHCMS Novel 2.0 — Nginx 反向代理示例
 # 将 example.com 替换为你的域名；证书路径按需修改。
-# 前置：API 监听 4000，Web 监听 3000
+# 前置：API 监听 4000、Web 监听 3000，且只监听 127.0.0.1（不要直接暴露到公网）。
+#
+# 用法：
+#   1) 复制到 /etc/nginx/conf.d/xhcms.conf（或 sites-available 后软链）
+#   2) 替换 server_name 与证书路径（下面按 Let's Encrypt 默认路径占位）
+#   3) nginx -t && nginx -s reload
 
 upstream wmcms_api { server 127.0.0.1:4000; }
 upstream wmcms_web { server 127.0.0.1:3000; }
 
+# ---------- HTTP：一律 301 到 HTTPS ----------
 server {
     listen 80;
     server_name example.com;
 
-    # 生产环境建议 301 到 HTTPS
-    # return 301 https://$host$request_uri;
+    # 用 certbot --webroot 签发/续期时需要放行 ACME 校验；不用 HTTP-01 可删除本 location
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ---------- HTTPS ----------
+server {
+    listen 443 ssl;
+    server_name example.com;
+
+    # TLS 证书占位：Let's Encrypt 默认路径；其它 CA 按实际路径替换
+    ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    # 需要 HTTP/2：Nginx ≥ 1.25.1 可加一行 `http2 on;`；旧版把 listen 改成 `listen 443 ssl http2;`
 
     client_max_body_size 20m;
 
+    # 基础安全头。注意 Nginx 的继承规则：某个 location 里只要出现 add_header，
+    # server 级的 add_header 就整体不再继承，所以下面 /uploads/ 里重复声明了同一组头。
+    # 统一加 always，错误响应也带上。
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options    "nosniff" always;
+    add_header X-Frame-Options           "SAMEORIGIN" always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy        "geolocation=(), microphone=(), camera=()" always;
+
     location /api/ {
         proxy_pass http://wmcms_api;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # 采集、TXT 批量导入等长任务可能超过默认 60s
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
     }
 
+    # 上传文件（由 API 的 ServeStaticModule 提供）
     location /uploads/ {
         proxy_pass http://wmcms_api;
-        proxy_set_header Host $host;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         expires 7d;
+
+        # 本 location 有 add_header → 需重复 server 级安全头（见上面的继承说明）
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options    "nosniff" always;
+        add_header X-Frame-Options           "SAMEORIGIN" always;
+        add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy        "geolocation=(), microphone=(), camera=()" always;
     }
 
     location / {
         proxy_pass http://wmcms_web;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection "upgrade";
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
     }
 }

@@ -20,6 +20,9 @@ const SERVER_API_BASE = (
   'http://localhost:4000/api/v1'
 ).replace(/\/+$/, '');
 
+/** SSR 取数超时（ms）：API 挂死时尽快走「内容加载失败」兜底，而不是拖到整页超时 */
+const SERVER_FETCH_TIMEOUT_MS = 10_000;
+
 interface ServerFetchOptions {
   revalidate?: number | false;
   tags?: string[];
@@ -33,6 +36,7 @@ async function serverGet<T>(path: string, options: ServerFetchOptions = {}): Pro
         revalidate: options.revalidate === undefined ? 30 : options.revalidate,
         tags: options.tags,
       },
+      signal: AbortSignal.timeout(SERVER_FETCH_TIMEOUT_MS),
     });
     if (!response.ok) return null;
     const payload = (await response.json()) as { data?: T };
@@ -44,7 +48,10 @@ async function serverGet<T>(path: string, options: ServerFetchOptions = {}): Pro
 
 async function serverGetText(path: string): Promise<string | null> {
   try {
-    const response = await fetch(`${SERVER_API_BASE}${path}`, { next: { revalidate: 60 } });
+    const response = await fetch(`${SERVER_API_BASE}${path}`, {
+      next: { revalidate: 60 },
+      signal: AbortSignal.timeout(SERVER_FETCH_TIMEOUT_MS),
+    });
     if (!response.ok) return null;
     return await response.text();
   } catch {
@@ -139,7 +146,17 @@ export async function publicPost<T>(path: string, body: unknown, token?: string 
   return (payload?.data ?? null) as T;
 }
 
-export const DEFAULT_SITE_SLUG = process.env.NEXT_PUBLIC_DEFAULT_SITE || 'tech';
+/** 默认站点 slug（与 .env.example / lib/site.ts 注释保持一致；缺失时给出显式告警） */
+export const DEFAULT_SITE_SLUG = (() => {
+  const configured = process.env.NEXT_PUBLIC_DEFAULT_SITE?.trim();
+  if (configured) return configured;
+  console.warn(
+    '[XHCMS] 未配置 NEXT_PUBLIC_DEFAULT_SITE，回退默认站点 "books"。' +
+      '若该站点不存在，门户所有未带站点前缀的页面都会 404。',
+  );
+  return 'books';
+})();
+
 export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
 
 /* ================================================================== */

@@ -117,19 +117,19 @@ pnpm dev:web
 - 后台：<http://localhost:3000/admin>
 - API 文档：<http://localhost:4000/api/docs>
 
-### 演示账号（种子数据，生产请立即修改）
+### 演示账号（种子数据）
 
 | 角色 | 账号 | 密码 | 说明 |
 | --- | --- | --- | --- |
-| 超级管理员 | `admin` | `Admin@123456` | 全部权限、双站点 |
-| 内容编辑 | `editor` | `Editor@123456` | 书籍/章节/审核/采集/分类/媒体 |
-| 运营专员 | `operator` | `Operator@123456` | VIP 订单、作者审核、会员 |
-| 读者 | `alice` | `Member@123456` | 书币 860、已解锁章节、书架/进度 |
-| 读者 | `bob` / `carol` | `Member@123456` | 普通读者（carol 在 ink 站） |
-| 作者 | `xinghe` | `Member@123456` | 笔名「星河散人」，《星海彼岸》《长夜行》 |
-| 作者 | `moxiang` | `Member@123456` | 笔名「墨香公子」，《春深不知处》《你是我的星河》 |
+| 超级管理员 | `admin` | 见 `.seed-credentials.txt`（生产随机）/ `SEED_ADMIN_PASSWORD`；开发默认 `Admin@123456` | 全部权限、双站点 |
+| 内容编辑 | `editor` | 见 `.seed-credentials.txt`（生产随机）/ `SEED_EDITOR_PASSWORD`；开发默认 `Editor@123456` | 书籍/章节/审核/采集/分类/媒体 |
+| 运营专员 | `operator` | 见 `.seed-credentials.txt`（生产随机）/ `SEED_OPERATOR_PASSWORD`；开发默认 `Operator@123456` | VIP 订单、作者审核、会员 |
+| 读者 | `alice` | 见 `.seed-credentials.txt`（生产随机）/ `SEED_MEMBER_PASSWORD`；开发默认 `Member@123456` | 书币 860、已解锁章节、书架/进度 |
+| 读者 | `bob` / `carol` | 同上（`SEED_MEMBER_PASSWORD`）；开发默认 `Member@123456` | 普通读者（carol 在 ink 站） |
+| 作者 | `xinghe` | 同上（`SEED_MEMBER_PASSWORD`）；开发默认 `Member@123456` | 笔名「星河散人」，《星海彼岸》《长夜行》 |
+| 作者 | `moxiang` | 同上（`SEED_MEMBER_PASSWORD`）；开发默认 `Member@123456` | 笔名「墨香公子」，《春深不知处》《你是我的星河》 |
 
-> 密码可通过 `SEED_ADMIN_PASSWORD` / `SEED_EDITOR_PASSWORD` / `SEED_OPERATOR_PASSWORD` / `SEED_MEMBER_PASSWORD` 覆盖；仓库不包含生产密钥。
+> 生产环境（`NODE_ENV=production`）首次 seed 若未提供 `SEED_*_PASSWORD`，会随机生成口令并写入 `apps/api/.seed-credentials.txt`（容器内可用 `SEED_CREDENTIALS_FILE` 指到 `/data` 卷），日志不会打印口令；首个登录后请立即改密并删除该文件。表中「开发默认」口令仅限本地开发/演示，生产为随机生成。仓库不包含生产密钥。
 
 ## 🗺️ 主要路由
 
@@ -214,6 +214,7 @@ node scripts/verify-admin.mjs                   # 后台 CDP 截图/控制台错
 
 ## 🐳 Docker 与 GitHub
 
+- **生产数据库变更**：当前流程用 `prisma db push`（`db:push` 与容器入口），不保留迁移历史；生产建议改用 `prisma migrate`（`prisma migrate deploy`）管理结构变更，**升级前先备份** `apps/api/prisma/dev.db`（容器内为数据卷 `/data/dev.db`），避免结构变更丢数据。
 - **Docker 自托管**：`powershell -ExecutionPolicy Bypass -File deploy\docker-up.ps1 -Rebuild -Seed`（或 `bash deploy/docker-up.sh --rebuild --seed` / `docker compose up -d --build`），API :4000、Web :3000，数据持久化到命名卷。
 - **GitHub Actions**：`.github/workflows/ci.yml`（类型检查 + 构建 + e2e）、`release.yml`（推 `v*` Tag 自动生成发布包并创建 Release）、`docker.yml`（自动推送 GHCR 镜像）。
 - **一键建仓推送**：`scripts/github-publish.ps1` / `scripts/github-publish.sh`（需 `GITHUB_TOKEN`）。

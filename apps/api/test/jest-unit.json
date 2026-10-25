@@ -1,0 +1,12 @@
+{
+  "rootDir": "../src",
+  "roots": ["<rootDir>", "<rootDir>/../test/unit"],
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "testEnvironment": "node",
+  "testRegex": ".*\\.spec\\.ts$",
+  "transform": {
+    "^.+\\.(t|j)s$": ["ts-jest", { "tsconfig": "<rootDir>/../tsconfig.json" }]
+  },
+  "testTimeout": 15000,
+  "maxWorkers": 1
+}

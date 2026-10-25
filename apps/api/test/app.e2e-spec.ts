@@ -562,6 +562,24 @@ describe('XHCMS Novel API (e2e)', () => {
       expect(body(run).succeeded).toBeGreaterThanOrEqual(2);
       state.collectNovelId = body(run).novelId;
 
+      // 追更/幂等：同一书源再跑一次不得重复入库；「0 新增」也不能报 success
+      const rerun = await http
+        .post('/api/v1/collect/run')
+        .set(admin())
+        .set(site('books'))
+        .send({ sourceId })
+        .expect(201);
+      expect(body(rerun).succeeded ?? 0).toBe(0);
+      expect(body(rerun).status).not.toBe('success');
+
+      const collected = await http
+        .get('/api/v1/chapters')
+        .query({ novelId: state.collectNovelId, page: 1, pageSize: 10 })
+        .set(admin())
+        .set(site('books'))
+        .expect(200);
+      expect(body(collected).total).toBe(2);
+
       const tasks = await http
         .get('/api/v1/collect/tasks')
         .set(admin())
@@ -606,6 +624,48 @@ describe('XHCMS Novel API (e2e)', () => {
       const response = await http.get('/api/v1/audit-logs').set(admin()).expect(200);
       const items = body(response).items as { action: string }[];
       expect(items.some((log) => log.action.startsWith('novel.') || log.action.startsWith('chapter.'))).toBe(true);
+    });
+  });
+
+  describe('会员令牌撤销', () => {
+    it('管理员禁用会员后旧会员令牌立即失效', async () => {
+      // 禁用前旧令牌可用
+      await http.get('/api/v1/public/sites/books/members/profile').set(member()).expect(200);
+
+      // 管理员禁用该会员：守卫每请求查库，旧令牌应立刻 401（不等令牌自然过期）
+      await http
+        .patch(`/api/v1/members/${state.memberId}/status`)
+        .set(admin())
+        .set(site('books'))
+        .send({ status: 'disabled' })
+        .expect(200);
+      await http.get('/api/v1/public/sites/books/members/profile').set(member()).expect(401);
+
+      // 恢复启用，避免影响后续用例
+      await http
+        .patch(`/api/v1/members/${state.memberId}/status`)
+        .set(admin())
+        .set(site('books'))
+        .send({ status: 'active' })
+        .expect(200);
+    });
+  });
+
+  describe('令牌撤销', () => {
+    it('登出后旧访问令牌立即失效', async () => {
+      const login = await http
+        .post('/api/v1/auth/login')
+        .send({ username: accounts.admin.username, password: accounts.admin.password })
+        .expect(201);
+      const token = body(login).accessToken as string;
+      const auth = { Authorization: `Bearer ${token}` };
+
+      // 登出前可用
+      await http.get('/api/v1/auth/profile').set(auth).expect(200);
+
+      // 登出自增 tokenVersion，旧令牌必须立即失效（不等待 30s 权限缓存过期）
+      await http.post('/api/v1/auth/logout').set(auth).expect(201);
+      await http.get('/api/v1/auth/profile').set(auth).expect(401);
     });
   });
 });

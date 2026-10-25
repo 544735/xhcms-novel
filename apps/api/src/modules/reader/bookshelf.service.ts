@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type {
   BookshelfItem,
   PageQuery,
@@ -149,11 +149,15 @@ export class BookshelfService {
     const site = await resolveActiveSite(this.prisma, siteSlug);
     await requireActiveMember(this.prisma, site.id, memberId);
 
+    // 先校验章节归属：章节必须存在（本站）且属于目标书籍，避免进度指向别的书
     const chapter = await this.prisma.chapter.findFirst({
-      where: { id: dto.chapterId, novelId: dto.novelId, novel: { siteId: site.id } },
-      select: { id: true, chapterNo: true },
+      where: { id: dto.chapterId, novel: { siteId: site.id } },
+      select: { id: true, novelId: true, chapterNo: true },
     });
     if (!chapter) throw new NotFoundException('章节不存在');
+    if (chapter.novelId !== dto.novelId) {
+      throw new BadRequestException('章节不属于该书籍，无法保存阅读进度');
+    }
 
     const percent = normalizePercent(dto.percent);
     await this.prisma.readingProgress.upsert({

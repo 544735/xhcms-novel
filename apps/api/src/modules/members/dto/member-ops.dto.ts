@@ -13,7 +13,7 @@ export class UpdateMemberStatusDto {
 
 /** 重置会员密码（管理员操作） */
 export class ResetMemberPasswordDto {
-  @ApiProperty({ description: '新密码（至少 8 位）', example: 'Member@123456' })
+  @ApiProperty({ description: '新密码（至少 8 位）', example: 'YourPassword' })
   @IsString({ message: '密码必须为字符串' })
   @MinLength(8, { message: '密码至少 8 位' })
   @MaxLength(64, { message: '密码最多 64 位' })

@@ -1,9 +1,53 @@
+import { ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import sanitizeHtml from 'sanitize-html';
 import { CHAPTER_DEFAULT_PRICE } from '@wmcms/shared';
 import { estimateReadingTime } from '../../common/utils/sanitize.util';
+import type { PrismaService } from '../../common/prisma/prisma.service';
 
 /** 默认分章正则：行首「第xx章/节/回」 */
 export const DEFAULT_CHAPTER_PATTERN = '^第[一二三四五六七八九十百千0-9]+[章节回]';
+
+/** 只读 chapter 的最小 client（PrismaService 或交互式事务客户端均可） */
+export type ChapterNoClient = PrismaService | Prisma.TransactionClient;
+
+/** 章节序号冲突的最大尝试次数（含首次） */
+export const CHAPTER_NO_MAX_ATTEMPTS = 3;
+
+/** 唯一约束冲突（P2002）判断：章节序号/采集去重的并发兜底都依赖它 */
+export function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+/** 下一章节序号：当前书 max(chapterNo) + 1 */
+export async function computeNextChapterNo(db: ChapterNoClient, novelId: string): Promise<number> {
+  const last = await db.chapter.findFirst({
+    where: { novelId },
+    orderBy: { chapterNo: 'desc' },
+    select: { chapterNo: true },
+  });
+  return (last?.chapterNo ?? 0) + 1;
+}
+
+/**
+ * 以「max+1」创建章节：并发创建撞 `@@unique([novelId, chapterNo])` 时重算序号重试。
+ * `create` 每次尝试都会收到新的 chapterNo；非唯一约束错误立即抛出。
+ */
+export async function createChapterWithRetry<T>(
+  db: ChapterNoClient,
+  novelId: string,
+  create: (chapterNo: number) => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0; attempt < CHAPTER_NO_MAX_ATTEMPTS; attempt += 1) {
+    const chapterNo = await computeNextChapterNo(db, novelId);
+    try {
+      return await create(chapterNo);
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+    }
+  }
+  throw new ConflictException('章节号冲突，请重试');
+}
 
 /**
  * 章节正文入库前转纯文本：

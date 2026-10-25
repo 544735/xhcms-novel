@@ -30,8 +30,13 @@ else
   echo "  已存在 .env，直接使用"
 fi
 if [[ "$SEED" -eq 1 ]]; then
-  sed -i 's|^SEED_DEMO=.*|SEED_DEMO=1|' .env
-  echo "  已开启 SEED_DEMO=1"
+  # 只对本次 docker compose up 生效：不写回 .env，避免把「每次启动都清库重灌」永久化。
+  # shell 环境变量优先级高于 .env 文件，因此这里 export 即可；入口脚本另有 /data/.seeded 兜底。
+  export SEED_DEMO=1
+  echo "  本次启动将写入演示数据（SEED_DEMO=1 仅本次生效，不写入 .env）"
+fi
+if grep -q '^SEED_DEMO=1' .env 2>/dev/null; then
+  echo "  注意：.env 中 SEED_DEMO=1 属于持久化设置（每次启动都会尝试灌数据，入口脚本已用 /data/.seeded 防重复）；建议改为 0"
 fi
 
 echo "==> 构建并启动容器（API :4000 / Web :3000）"

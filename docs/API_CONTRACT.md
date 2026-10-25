@@ -133,7 +133,8 @@
 
 - 站点级。`GET /media` query：`mimeType`、`folder` → `Paginated<Media>`。
 - 上传：`multipart/form-data`，字段 `file`（必填）、`siteId`（必填）、`folder?`。
-  校验类型 `UPLOAD_ALLOWED_MIME`、大小 ≤ 10MB；图片用 `sharp` 读取宽高；文件落盘
+  校验类型 `UPLOAD_ALLOWED_MIME`（不含 SVG）、大小 ≤ 10MB；图片宽高由内置纯 JS 解析器读取
+  （`apps/api/src/common/utils/image-size.util.ts`，支持 PNG/GIF/JPEG/WebP，无 `sharp` 原生依赖）；文件落盘
   `apps/api/uploads/<siteId>/<yyyyMM>/<uuid>.<ext>`，`url = /uploads/<...>`（`ServeStaticModule` 暴露）。
 - 删除同时删除磁盘文件（文件不存在时忽略）。
 

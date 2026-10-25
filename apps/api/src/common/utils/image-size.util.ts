@@ -7,10 +7,27 @@ export interface ImageDimensions {
   height: number;
 }
 
+/** 允许的宽高范围：超出视为解析不可信（畸形头/溢出），直接置空 */
+const MIN_DIMENSION = 1;
+const MAX_DIMENSION = 10_000;
+
+function sanitizeDimension(value: number): number | null {
+  if (!Number.isFinite(value) || !Number.isInteger(value)) return null;
+  if (value < MIN_DIMENSION || value > MAX_DIMENSION) return null;
+  return value;
+}
+
 export function readImageDimensions(buffer: Buffer): ImageDimensions | null {
   if (!buffer || buffer.length < 16) return null;
   try {
-    return png(buffer) ?? gif(buffer) ?? webp(buffer) ?? jpeg(buffer);
+    const raw = png(buffer) ?? gif(buffer) ?? webp(buffer) ?? jpeg(buffer);
+    if (!raw) return null;
+    // PNG 的 readUInt32BE 最大可到 4294967295，远超 Prisma Int(32 位有符号)；
+    // 越界一律置 null，避免写库抛错 + 文件已落盘产生孤儿文件
+    const width = sanitizeDimension(raw.width);
+    const height = sanitizeDimension(raw.height);
+    if (width === null || height === null) return null;
+    return { width, height };
   } catch {
     return null;
   }

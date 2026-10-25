@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type { Category as PrismaCategory } from '@prisma/client';
 import type {
   Category,
@@ -27,7 +28,11 @@ interface CategoryCountRow extends PrismaCategory {
   _count: { articles: number; novels: number };
 }
 
-/** 扁平栏目 → 树（入参需已按 sort 排序） */
+/**
+ * 扁平栏目 → 树（入参需已按 sort 排序）。
+ * 带环保护：父链回到自身说明库里有脏数据，把节点提升为根，
+ * 避免整棵子树既不是 root 也不是任何 children（那样会从树里彻底消失）。
+ */
 export function buildCategoryTree(rows: Category[]): CategoryNode[] {
   const map = new Map<string, CategoryNode>();
   for (const row of rows) map.set(row.id, { ...row, children: [] });
@@ -37,8 +42,24 @@ export function buildCategoryTree(rows: Category[]): CategoryNode[] {
     const node = map.get(row.id);
     if (!node) continue;
     const parent = row.parentId ? map.get(row.parentId) : undefined;
-    if (parent) parent.children.push(node);
-    else roots.push(node);
+    if (!parent) {
+      roots.push(node);
+      continue;
+    }
+    // 沿父链上溯，若回到自身则判定成环
+    const seen = new Set<string>([row.id]);
+    let cursor: string | null = parent.id;
+    let cyclic = false;
+    while (cursor) {
+      if (seen.has(cursor)) {
+        cyclic = true;
+        break;
+      }
+      seen.add(cursor);
+      cursor = map.get(cursor)?.parentId ?? null;
+    }
+    if (cyclic) roots.push(node);
+    else parent.children.push(node);
   }
   return roots;
 }
@@ -134,25 +155,34 @@ export class CategoriesService {
       });
     }
 
-    const row = await this.prisma.category.create({
-      data: {
-        siteId,
-        parentId: dto.parentId ?? null,
-        name,
-        slug,
-        type: dto.type ?? 'article',
-        description: dto.description ? sanitizePlainText(dto.description, 500) : null,
-        icon: dto.icon ? sanitizePlainText(dto.icon, 200) : null,
-        sort: dto.sort ?? 0,
-        status: dto.status ?? 'enabled',
-        seoTitle: dto.seoTitle ? sanitizePlainText(dto.seoTitle, 200) : null,
-        seoKeywords: dto.seoKeywords ? sanitizePlainText(dto.seoKeywords, 500) : null,
-        seoDescription: dto.seoDescription ? sanitizePlainText(dto.seoDescription, 500) : null,
-        content: dto.content ? sanitizeContent(dto.content) : null,
-        template: dto.template ? sanitizePlainText(dto.template, 120) : null,
-      },
-      include: { _count: { select: { articles: true, novels: true } } },
-    });
+    let row: CategoryCountRow;
+    try {
+      row = await this.prisma.category.create({
+        data: {
+          siteId,
+          parentId: dto.parentId ?? null,
+          name,
+          slug,
+          type: dto.type ?? 'article',
+          description: dto.description ? sanitizePlainText(dto.description, 500) : null,
+          icon: dto.icon ? sanitizePlainText(dto.icon, 200) : null,
+          sort: dto.sort ?? 0,
+          status: dto.status ?? 'enabled',
+          seoTitle: dto.seoTitle ? sanitizePlainText(dto.seoTitle, 200) : null,
+          seoKeywords: dto.seoKeywords ? sanitizePlainText(dto.seoKeywords, 500) : null,
+          seoDescription: dto.seoDescription ? sanitizePlainText(dto.seoDescription, 500) : null,
+          content: dto.content ? sanitizeContent(dto.content) : null,
+          template: dto.template ? sanitizePlainText(dto.template, 120) : null,
+        },
+        include: { _count: { select: { articles: true, novels: true } } },
+      });
+    } catch (error) {
+      // 并发创建同名 slug 时唯一约束抛 P2002：预检查覆盖不到竞态，这里转 409
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('栏目 slug 已存在，请更换');
+      }
+      throw error;
+    }
 
     await this.audit.log(req, {
       action: 'category.create',
@@ -173,7 +203,8 @@ export class CategoriesService {
     if (!current) throw new NotFoundException('栏目不存在');
 
     if (dto.parentId !== undefined) {
-      await this.assertParent(dto.parentId, siteId, id);
+      // 存在性/跨站快速失败；环检测在下面的 $transaction 内用全量父子映射复核
+      await this.assertParent(dto.parentId, siteId);
     }
 
     const data: Record<string, unknown> = {};
@@ -221,11 +252,25 @@ export class CategoriesService {
       data.template = dto.template ? sanitizePlainText(dto.template, 120) : null;
     }
 
-    const row = await this.prisma.category.update({
-      where: { id },
-      data,
-      include: { _count: { select: { articles: true, novels: true } } },
-    });
+    // 事务内复核环 + 更新：读写同一快照，且把「先查后写」的竞态窗口压缩到一次事务
+    let row: CategoryCountRow;
+    try {
+      row = await this.prisma.$transaction(async (tx) => {
+        if (dto.parentId !== undefined) {
+          await this.assertNoCycle(tx, siteId, id, dto.parentId ?? null);
+        }
+        return tx.category.update({
+          where: { id },
+          data,
+          include: { _count: { select: { articles: true, novels: true } } },
+        });
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('栏目 slug 已存在，请更换');
+      }
+      throw error;
+    }
 
     await this.audit.log(req, {
       action: 'category.update',
@@ -313,35 +358,50 @@ export class CategoriesService {
     };
   }
 
-  /** 校验父栏目：同站点、存在、且不构成环 */
+  /** 校验父栏目：存在且同站点（环检测统一走 assertNoCycle） */
   private async assertParent(
     parentId: string | null | undefined,
     siteId: string,
-    selfId?: string,
   ): Promise<void> {
     if (!parentId) return;
-    if (selfId && parentId === selfId) {
-      throw new BadRequestException('不能将栏目移动到自身或其子栏目下');
-    }
-    const parent = await this.prisma.category.findUnique({ where: { id: parentId } });
+    const parent = await this.prisma.category.findUnique({
+      where: { id: parentId },
+      select: { id: true, siteId: true },
+    });
     if (!parent || parent.siteId !== siteId) {
       throw new BadRequestException('父栏目不存在或不属于当前站点');
     }
-    if (!selfId) return;
+  }
 
-    const seen = new Set<string>();
-    let cursor: string | null = parent.parentId;
+  /**
+   * 事务内用「全量父子映射」检测环：把 id 挂到 parentId 之后，
+   * 沿父链上溯若回到 id 即成环。
+   * 相比逐级 findUnique：一次查询拿到全站父子关系，且读写处于同一事务内，
+   * 把「先查后写」的竞态窗口压到最小（SQLite 下仍需注意快照隔离，
+   * 本方法的作用是让判定基于事务内的最新快照，而非多次往返的混合快照）。
+   */
+  private async assertNoCycle(
+    db: Prisma.TransactionClient,
+    siteId: string,
+    id: string,
+    parentId: string | null,
+  ): Promise<void> {
+    const rows = await db.category.findMany({
+      where: { siteId },
+      select: { id: true, parentId: true },
+    });
+    const parentMap = new Map<string, string | null>(rows.map((row) => [row.id, row.parentId]));
+    // 模拟本次变更后的父子关系
+    parentMap.set(id, parentId);
+
+    const seen = new Set<string>([id]);
+    let cursor = parentId;
     while (cursor) {
-      if (cursor === selfId) {
+      if (seen.has(cursor)) {
         throw new BadRequestException('不能将栏目移动到自身或其子栏目下');
       }
-      if (seen.has(cursor)) break;
       seen.add(cursor);
-      const node: { parentId: string | null } | null = await this.prisma.category.findUnique({
-        where: { id: cursor },
-        select: { parentId: true },
-      });
-      cursor = node?.parentId ?? null;
+      cursor = parentMap.get(cursor) ?? null;
     }
   }
 }

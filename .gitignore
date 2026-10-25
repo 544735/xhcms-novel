@@ -13,6 +13,9 @@ coverage/
 !.env.example
 *.bak
 
+# 生产首次 seed 生成的初始凭据（含明文口令，禁止提交）
+apps/api/.seed-credentials.txt
+
 # 数据库与上传
 apps/api/prisma/*.db
 apps/api/prisma/*.db-wal
