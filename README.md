@@ -1,5 +1,10 @@
 # XHCMS Novel 2.0
 
+[![CI](https://github.com/544735/xhcms-novel/actions/workflows/ci.yml/badge.svg)](https://github.com/544735/xhcms-novel/actions/workflows/ci.yml)
+[![Release](https://github.com/544735/xhcms-novel/actions/workflows/release.yml/badge.svg)](https://github.com/544735/xhcms-novel/actions/workflows/release.yml)
+[![Docker](https://github.com/544735/xhcms-novel/actions/workflows/docker.yml/badge.svg)](https://github.com/544735/xhcms-novel/actions/workflows/docker.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 > 现代化小说网站 —— **NestJS 11 + Next.js 15 + TypeScript + Prisma** 全栈实现。
 > 保留经典 XHCMS 的多站点 / 会员 / 评论 / 主题 / 插件 / RBAC 底座，把内容域重构为 **书籍 · 分卷 · 章节 · 阅读器 · VIP 付费 · 作者中心 · 采集**。
 
