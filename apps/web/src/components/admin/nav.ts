@@ -7,6 +7,7 @@ import {
   FolderTree,
   Gauge,
   ImageIcon,
+  Info,
   LayoutDashboard,
   MessageSquare,
   Palette,
@@ -64,6 +65,7 @@ export const ADMIN_NAV: NavGroup[] = [
       { label: '角色权限', href: '/admin/roles', icon: ShieldCheck, permission: 'role:view' },
       { label: '操作日志', href: '/admin/audit-logs', icon: Gauge, permission: 'audit:view' },
       { label: '站点设置', href: '/admin/settings', icon: Settings, permission: 'setting:view' },
+      { label: '关于与安装', href: '/admin/about', icon: Info },
     ],
   },
 ];
