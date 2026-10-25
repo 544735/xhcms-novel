@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
 import { hashSync } from 'bcryptjs';
 import { randomBytes } from 'node:crypto';
+import { createServer, type Server } from 'node:http';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 
@@ -32,6 +33,10 @@ describe('XHCMS Novel API (e2e)', () => {
   const tokens: Record<string, string> = {};
   const siteIds: Record<string, string> = {};
   const state: Record<string, string> = {};
+
+  /** 采集 e2e 使用的本地 fixture 服务（避免依赖外部/本机 4000 端口） */
+  let collectFixture: Server | null = null;
+  let collectBase = '';
 
   const admin = () => ({ Authorization: `Bearer ${tokens.admin}` });
   const member = () => ({ Authorization: `Bearer ${tokens.member}` });
@@ -89,6 +94,12 @@ describe('XHCMS Novel API (e2e)', () => {
 
   afterAll(async () => {
     await app?.close();
+    if (collectFixture) {
+      await new Promise<void>((resolve) => {
+        collectFixture!.close(() => resolve());
+      });
+      collectFixture = null;
+    }
     await prisma.$disconnect();
   });
 
@@ -473,6 +484,42 @@ describe('XHCMS Novel API (e2e)', () => {
     });
 
     it('采集中心：创建书源 → 试采集 → 正式采集成功', async () => {
+      // 启动一个临时 HTTP fixture，模拟外部书源站点（CI 中无需本机 API 在 4000 端口监听）
+      collectFixture = createServer((req, res) => {
+        const url = req.url ?? '/';
+        res.setHeader('content-type', 'text/html; charset=utf-8');
+        if (url.startsWith('/chapter/')) {
+          const chapterNo = Number(url.split('/').pop() ?? '1');
+          const paragraphs = Array.from({ length: 4 }, (_, index) => {
+            return `<p>第${chapterNo}章第${index + 1}段：这是用于端到端采集测试的正文内容，包含足够的字符用于字数统计。</p>`;
+          }).join('');
+          res.end(
+            `<html><body><h1 class="chapter-title">第${chapterNo}章 测试章节</h1>` +
+              `<div class="chapter-content">${paragraphs}</div></body></html>`,
+          );
+          return;
+        }
+        res.end(
+          '<html><body>' +
+            '<h1 class="book-title">雾隐山河</h1>' +
+            '<span class="book-author">测试作者</span>' +
+            `<img class="book-cover" src="${collectBase}/covers/wu-du-lai-xin.svg" />` +
+            '<div class="book-summary">一个用于采集演示的故事简介。</div>' +
+            '<ul class="chapter-list">' +
+            `<li><a href="${collectBase}/chapter/1">第一章 山雨</a></li>` +
+            `<li><a href="${collectBase}/chapter/2">第二章 夜行</a></li>` +
+            '</ul></body></html>',
+        );
+      });
+      await new Promise<void>((resolve) => {
+        collectFixture!.listen(0, '127.0.0.1', () => resolve());
+      });
+      const address = collectFixture.address();
+      if (!address || typeof address === 'string') {
+        throw new Error('采集 fixture 启动失败');
+      }
+      collectBase = `http://127.0.0.1:${address.port}`;
+
       const source = await http
         .post('/api/v1/book-sources')
         .set(admin())
@@ -480,7 +527,7 @@ describe('XHCMS Novel API (e2e)', () => {
         .send({
           name: 'E2E 演示书源',
           type: 'html',
-          baseUrl: 'http://127.0.0.1:4000/api/v1/public/demo/collect/book',
+          baseUrl: `${collectBase}/book`,
           selectors: {
             bookTitle: '.book-title',
             bookAuthor: '.book-author',
@@ -489,7 +536,7 @@ describe('XHCMS Novel API (e2e)', () => {
             chapterLinks: '.chapter-list a',
             chapterTitle: '.chapter-title',
             chapterContent: '.chapter-content',
-            linkPrefix: 'http://127.0.0.1:4000',
+            linkPrefix: collectBase,
           },
           enabled: true,
         })
